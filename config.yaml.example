@@ -12,7 +12,7 @@ project:
 
 model:
   # Model identifier (e.g., gemini-2.0-pro, gemini-2.0-flash)
-  name: "gemini-2.0-pro"
+  name: "gemini-2.5-flash"
   
   # Timeout in seconds (increase for large codebases)
   timeout: 600
