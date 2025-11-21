@@ -1,0 +1,66 @@
+project:
+  # Path to the source ZIP file
+  zip_path: "./project_repo.zip"
+  
+  # Path to prompt text files
+  prompt_file: "./user_prompt.txt"
+  system_prompt_file: "./system_prompt.txt"
+  
+  # Directory where the generated files will be saved
+  # The script handles creating subdirectories if needed
+  output_dir: "./output"
+
+model:
+  # Model identifier (e.g., gemini-2.0-pro, gemini-2.0-flash)
+  name: "gemini-2.0-pro"
+  
+  # Timeout in seconds (increase for large codebases)
+  timeout: 600
+
+processing:
+  # List of file extensions to include in the context
+  valid_extensions:
+    - .py
+    - .js
+    - .ts
+    - .tsx
+    - .jsx
+    - .html
+    - .css
+    - .json
+    - .md
+    - .yml
+    - .yaml
+    - .dockerfile
+    - .txt
+    - .sh
+    - .java
+    - .go
+    - .rs
+    - .cpp
+    - .c
+    - .h
+    - .sql
+    - .ini
+    - .toml
+    - .env.example
+
+  # Specific filenames to include regardless of extension
+  include_filenames:
+    - Dockerfile
+    - Makefile
+    - Gemfile
+    - LICENSE
+
+  # Directories to completely ignore
+  ignore_dirs:
+    - .git
+    - __pycache__
+    - node_modules
+    - venv
+    - .idea
+    - .vscode
+    - dist
+    - build
+    - coverage
+    - target

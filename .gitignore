@@ -10,6 +10,9 @@ venv/
 # Local configuration (user specific)
 config.yaml
 
+# Input data
+*.zip
+
 # Output directory
 output/
 
