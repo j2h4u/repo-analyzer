@@ -10,6 +10,8 @@ project:
   # The script handles creating subdirectories if needed
   output_dir: "./output"
 
+  report_file: "report.txt"
+
 model:
   # Model identifier (e.g., gemini-2.0-pro, gemini-2.0-flash)
   name: "gemini-2.5-flash"
