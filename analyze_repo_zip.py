@@ -53,7 +53,24 @@ class AppConfig:
             processing=ProcessingConfig(**data['processing'])
         )
 
-# --- 2. SERVICE FUNCTIONS ---
+# --- 2. HELPERS FOR REPORTING ---
+
+def format_token_count(count: int) -> str:
+    """Converts 300619 -> '301k'"""
+    if count >= 1_000_000:
+        return f"{count/1_000_000:.1f}M"
+    if count >= 1_000:
+        return f"{count/1000:.0f}k"
+    return str(count)
+
+def format_duration(seconds: float) -> str:
+    """Converts 147.5 -> '2m 27s'"""
+    m, s = divmod(int(seconds), 60)
+    if m > 0:
+        return f"{m}m {s}s"
+    return f"{s}s"
+
+# --- 3. CORE LOGIC ---
 
 def check_model_availability(model_name: str):
     spinner = Halo(text=f'Verifying model access: {model_name}...', spinner='dots')
@@ -65,7 +82,7 @@ def check_model_availability(model_name: str):
                 found = True
                 break
         if found: spinner.succeed(f"Model '{model_name}' is valid.")
-        else: 
+        else:
             spinner.fail(f"Model '{model_name}' not found.")
             exit(1)
     except Exception as e:
@@ -76,21 +93,32 @@ def extract_and_report(zip_path: str, output_path: str, report_path: str, cfg: P
     valid_exts = tuple(cfg.valid_extensions)
     include_names = set(n.lower() for n in cfg.include_filenames)
     ignore_dirs = cfg.ignore_dirs
-    COLLAPSE_THRESHOLD = 50 
-    
+    COLLAPSE_THRESHOLD = 50
+
     skipped_no_ext = []
     skipped_by_ext = {}
+    encountered_ignore_dirs = set()
 
     with open(output_path, 'w', encoding='utf-8') as out_f, \
          zipfile.ZipFile(zip_path, 'r') as z:
-        
+
         for filename in z.namelist():
-            if filename.endswith('/') or any(d in filename for d in ignore_dirs):
+            if filename.endswith('/'): continue
+
+            # Logic to track WHICH ignored dir matched
+            matched_ignore = None
+            for d in ignore_dirs:
+                if d in filename: # Simple substring check for dir
+                    matched_ignore = d
+                    break
+
+            if matched_ignore:
+                encountered_ignore_dirs.add(matched_ignore)
                 continue
-            
+
             is_valid = filename.lower().endswith(valid_exts) or \
                        os.path.basename(filename).lower() in include_names
-            
+
             if is_valid:
                 try:
                     content = z.read(filename).decode('utf-8')
@@ -105,19 +133,25 @@ def extract_and_report(zip_path: str, output_path: str, report_path: str, cfg: P
                 if not ext: skipped_no_ext.append(filename)
                 else: skipped_by_ext.setdefault(ext, []).append(filename)
 
-    # Initial Report Writing (Mode 'w')
+    # Initial Report Writing
     with open(report_path, 'w', encoding='utf-8') as rep:
         rep.write(f"--- EXECUTION REPORT ---\n")
         rep.write(f"Date: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
         rep.write(f"Source: {os.path.basename(zip_path)}\n\n")
-        
+
         rep.write(f"--- SKIPPED FILES (Noise Reduction) ---\n")
-        rep.write(f"Ignored Folders: {', '.join(ignore_dirs)}\n")
-        
+
+        if encountered_ignore_dirs:
+            # Format with trailing slash
+            sorted_dirs = sorted([f"{d}/" for d in encountered_ignore_dirs])
+            rep.write(f"Ignored Folders: {', '.join(sorted_dirs)}\n")
+        else:
+            rep.write(f"Ignored Folders: None encountered\n")
+
         if skipped_no_ext:
             rep.write(f"Misc / No Extension ({len(skipped_no_ext)}):\n")
             for f in sorted(skipped_no_ext): rep.write(f" - {f}\n")
-            
+
         for ext, files in sorted(skipped_by_ext.items()):
             count = len(files)
             if count > COLLAPSE_THRESHOLD:
@@ -129,34 +163,38 @@ def extract_and_report(zip_path: str, output_path: str, report_path: str, cfg: P
 
 def append_inference_stats(report_path: str, response, duration_sec: float, model_name: str):
     """
-    Appends API usage statistics to the existing report.
+    Appends clean, human-readable stats to the report.
     """
     with open(report_path, 'a', encoding='utf-8') as rep:
-        rep.write(f"--- INFERENCE STATISTICS ---\n")
+        rep.write(f"--- INFERENCE STATS ---\n")
         rep.write(f"Model: {model_name}\n")
-        rep.write(f"Duration: {duration_sec:.2f} seconds\n")
-        
-        # Token Usage
+        rep.write(f"Duration: {format_duration(duration_sec)}\n")
+
+        # 1. Token Usage
         if hasattr(response, 'usage_metadata'):
             usage = response.usage_metadata
+            in_tok = usage.prompt_token_count
+            out_tok = usage.candidates_token_count
+            total_tok = usage.total_token_count
+
+            # Visual alignment using fixed width (:>6)
             rep.write(f"Token Usage:\n")
-            rep.write(f"  - Input (Context):  {usage.prompt_token_count}\n")
-            rep.write(f"  - Output (Gen):     {usage.candidates_token_count}\n")
-            rep.write(f"  - Total:            {usage.total_token_count}\n")
+            rep.write(f"  - Input (context):  {format_token_count(in_tok):>6} ({in_tok})\n")
+            rep.write(f"  - Output (gen):     {format_token_count(out_tok):>6} ({out_tok})\n")
+            rep.write(f"  - Total:            {format_token_count(total_tok):>6} ({total_tok})\n")
+
+            if duration_sec > 0:
+                speed = out_tok / duration_sec
+                rep.write(f"Token Speed: {int(speed)} tokens/sec (output)\n")
         else:
-            rep.write("Token Usage: Not available in response.\n")
+            rep.write("Token Usage: N/A\n")
 
         # Finish Reason
         if response.candidates:
             reason = response.candidates[0].finish_reason
             # Enum to string map if needed, but usually str(reason) is readable like FinishReason.STOP
-            rep.write(f"Finish Reason: {reason.name}\n") 
-        
-        # Speed calculation
-        if hasattr(response, 'usage_metadata') and duration_sec > 0:
-            out_tokens = response.usage_metadata.candidates_token_count
-            tps = out_tokens / duration_sec
-            rep.write(f"Speed: {tps:.2f} tokens/sec (output)\n")
+            if reason.name != "STOP":
+                rep.write(f"Finish Reason: {reason.name}\n")
 
 def get_or_upload_file(local_path: str):
     def get_hash(fp):
@@ -167,7 +205,7 @@ def get_or_upload_file(local_path: str):
 
     file_hash = get_hash(local_path)
     target_display_name = f"repo_context_{file_hash}"
-    
+
     with Halo(text='Checking Gemini cache...', spinner='dots'):
         for f in genai.list_files():
             if f.display_name == target_display_name:
@@ -199,8 +237,8 @@ def save_generated_files(response_text: str, target_dir: str):
     for filename, content in matches:
         filename = filename.strip()
         full_path = os.path.abspath(os.path.join(safe_dir, filename))
-        if not full_path.startswith(safe_dir): continue # Security skip
-            
+        if not full_path.startswith(safe_dir): continue
+
         os.makedirs(os.path.dirname(full_path), exist_ok=True)
         try:
             with open(full_path, 'w', encoding='utf-8') as f:
@@ -209,7 +247,7 @@ def save_generated_files(response_text: str, target_dir: str):
         except Exception as e:
             print(f"  Error: {e}")
 
-# --- 3. MAIN EXECUTION ---
+# --- 4. MAIN EXECUTION ---
 
 def main():
     load_dotenv()
@@ -234,7 +272,6 @@ def main():
     os.makedirs(run_dir, exist_ok=True)
     print(f"\nOutput directory created: {run_dir}")
 
-    # Prepare content
     with open(config.project.system_prompt_file, 'r') as f: sys_prompt = f.read()
     with open(config.project.prompt_file, 'r') as f: user_prompt = f.read()
 
@@ -242,15 +279,12 @@ def main():
         temp_txt = tmp.name
 
     try:
-        # 1. Extract & Initial Report
         with Halo(text=f'Processing ZIP...', spinner='dots'):
             extract_and_report(config.project.zip_path, temp_txt, report_path, config.processing)
 
-        # 2. Upload/Cache
         gemini_file, is_cached = get_or_upload_file(temp_txt)
         if is_cached: print(f"Using cached context: {gemini_file.display_name}")
 
-        # 3. Inference & Timing
         spinner = Halo(text=f'Generating with {config.model.name}...', spinner='dots')
         spinner.start()
         start_time = time.time()
@@ -266,11 +300,10 @@ def main():
             spinner.fail(f"Generation failed: {e}")
             exit(1)
 
-        # 4. Append Stats & Save Files
         duration = end_time - start_time
         append_inference_stats(report_path, response, duration, config.model.name)
         print(f"Report updated: {report_path}")
-        
+
         save_generated_files(response.text, run_dir)
 
     finally:
