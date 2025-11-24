@@ -5,10 +5,12 @@ A Python automation tool that processes a codebase archive (ZIP), uploads the co
 ## Features
 
 - **Smart Context Handling**: Extracts relevant code files from a ZIP archive based on configuration
+- **Tree-Style Structure**: Generates a visual file tree (like `tree` command) showing all files, with `# not attached` markers for excluded files
 - **Cost & Time Efficient**: Hashes the codebase content and checks Gemini's file cache to avoid re-uploading identical context
 - **Model Validation**: Verifies API access and model name validity before starting heavy processing
 - **Diagnostic Reporting**: Generates detailed reports showing which files were excluded from the AI context
 - **Auto-Extraction**: Parses the LLM response and automatically saves generated code files to the output directory
+- **Reusable Context**: Saves the merged context file for debugging or reuse in other AI models
 
 ## Setup
 
@@ -38,7 +40,11 @@ A Python automation tool that processes a codebase archive (ZIP), uploads the co
    ./analyze_repo_zip.py
    ```
 
-The script will extract relevant files, upload to Gemini (or use cached version), generate response, and save files to `output/` folder.
+The script will:
+- Extract and analyze files from the ZIP
+- Generate `context.txt` with tree structure and file contents
+- Upload to Gemini (or use cloud-cached version)
+- Generate AI response and save files to `output/` folder
 
 ## Utility Tools
 
@@ -47,9 +53,14 @@ The script will extract relevant files, upload to Gemini (or use cached version)
 
 ## Output
 
-- **`output/`** - Generated code files (preserves directory structure)
-- **`context.txt`** - Merged codebase context sent to Gemini (useful for debugging or reuse in other models)
+After each run, a timestamped directory is created in `output/` containing:
+
+- **`context.txt`** - Full merged context with:
+  - Tree-style directory structure (files marked with `# not attached` if excluded)
+  - Complete contents of all included files
+  - Perfect for reusing in other AI models or debugging
 - **`report.txt`** - Execution report with token usage, processing duration, and skipped files
+- **Generated files** - AI-generated code preserving the original directory structure
 
 ## Tips
 
