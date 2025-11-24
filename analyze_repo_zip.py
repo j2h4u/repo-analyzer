@@ -42,7 +42,7 @@ class AppConfig:
     @classmethod
     def load(cls, config_path: str) -> 'AppConfig':
         if not os.path.exists(config_path):
-            print(f"Error: Configuration file '{config_path}' not found.")
+            print(f"❗️Error: Configuration file '{config_path}' not found.")
             exit(1)
         with open(config_path, 'r', encoding='utf-8') as f:
             data = yaml.safe_load(f)
@@ -142,9 +142,8 @@ def check_model_availability(model_name: str):
             spinner.fail(f"Model '{model_name}' not found.")
             exit(1)
     except Exception as e:
-        spinner.fail(f"API Connection Error: {e}")
+        spinner.fail(f"❗️API Connection Error: {e}")
         exit(1)
-
 
 def extract_and_report(zip_path: str, output_path: str, report_path: str, cfg: ProcessingConfig):
     valid_exts = tuple(cfg.valid_extensions)
@@ -314,16 +313,52 @@ def save_generated_files(response_text: str, target_dir: str):
 
     for filename, content in matches:
         filename = filename.strip()
+        content = content.strip()
         full_path = os.path.abspath(os.path.join(safe_dir, filename))
         if not full_path.startswith(safe_dir): continue
 
         os.makedirs(os.path.dirname(full_path), exist_ok=True)
+        
         try:
+            # Check if file exists and compare content
+            if os.path.exists(full_path):
+                with open(full_path, 'r', encoding='utf-8') as f:
+                    existing_content = f.read()
+                
+                if existing_content == content:
+                    # Same content, skip
+                    print(f"    Skipped: {filename} (duplicate)")
+                    continue
+                else:
+                    # Different content, find a new name with suffix
+                    base, ext = os.path.splitext(filename)
+                    counter = 1
+                    while True:
+                        new_filename = f"{base}.{counter}{ext}"
+                        new_full_path = os.path.abspath(os.path.join(safe_dir, new_filename))
+                        
+                        if not os.path.exists(new_full_path):
+                            full_path = new_full_path
+                            filename = new_filename
+                            break
+                        
+                        # Check if this numbered file also has the same content
+                        with open(new_full_path, 'r', encoding='utf-8') as f:
+                            if f.read() == content:
+                                print(f"    Skipped: {filename} (duplicate of {new_filename})")
+                                break
+                        
+                        counter += 1
+                    else:
+                        # This else belongs to while, executes if we didn't break
+                        continue
+            
+            # Save the file
             with open(full_path, 'w', encoding='utf-8') as f:
-                f.write(content.strip())
+                f.write(content)
             print(f"    Saved: {filename}")
         except Exception as e:
-            print(f"    Error: {e}")
+            print(f"    ❗️Error: {e}")
 
 # --- 4. MAIN EXECUTION ---
 
@@ -337,7 +372,7 @@ def main():
 
     for p in [config.project.zip_path, config.project.prompt_file, config.project.system_prompt_file]:
         if not os.path.exists(p):
-            print(f"Error: {p} not found"); exit(1)
+            print(f"❗️Error: {p} not found"); exit(1)
 
     check_model_availability(config.model.name)
 
@@ -349,7 +384,7 @@ def main():
     context_path = os.path.join(run_dir, "context.txt")
 
     os.makedirs(run_dir, exist_ok=True)
-    print(f"\n  Output directory created: {run_dir}")
+    print(f"  Output directory created: {run_dir}")
 
     with open(config.project.system_prompt_file, 'r') as f: sys_prompt = f.read()
     with open(config.project.prompt_file, 'r') as f: user_prompt = f.read()
