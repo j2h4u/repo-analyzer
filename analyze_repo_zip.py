@@ -306,6 +306,13 @@ def main():
 
         save_generated_files(response.text, run_dir)
 
+        # Save the merged context file for reuse
+        context_path = os.path.join(run_dir, "context.txt")
+        with open(temp_txt, 'r', encoding='utf-8') as src, \
+             open(context_path, 'w', encoding='utf-8') as dst:
+            dst.write(src.read())
+        print(f"Context saved: {context_path}")
+
     finally:
         if os.path.exists(temp_txt): os.remove(temp_txt)
 

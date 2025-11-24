@@ -48,6 +48,7 @@ The script will extract relevant files, upload to Gemini (or use cached version)
 ## Output
 
 - **`output/`** - Generated code files (preserves directory structure)
+- **`context.txt`** - Merged codebase context sent to Gemini (useful for debugging or reuse in other models)
 - **`report.txt`** - Execution report with token usage, processing duration, and skipped files
 
 ## Tips
