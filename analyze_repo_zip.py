@@ -309,7 +309,7 @@ def save_generated_files(response_text: str, target_dir: str):
         print("\n--- NO FILES DETECTED ---")
         return
 
-    print(f"\nFound {len(matches)} file(s). Saving to '{target_dir}'...")
+    print(f"\n  Found {len(matches)} file(s). Saving to '{target_dir}'...")
     safe_dir = os.path.abspath(target_dir)
 
     for filename, content in matches:
@@ -321,9 +321,9 @@ def save_generated_files(response_text: str, target_dir: str):
         try:
             with open(full_path, 'w', encoding='utf-8') as f:
                 f.write(content.strip())
-            print(f"  Saved: {filename}")
+            print(f"    Saved: {filename}")
         except Exception as e:
-            print(f"  Error: {e}")
+            print(f"    Error: {e}")
 
 # --- 4. MAIN EXECUTION ---
 
@@ -349,7 +349,7 @@ def main():
     context_path = os.path.join(run_dir, "context.txt")
 
     os.makedirs(run_dir, exist_ok=True)
-    print(f"\nOutput directory created: {run_dir}")
+    print(f"\n  Output directory created: {run_dir}")
 
     with open(config.project.system_prompt_file, 'r') as f: sys_prompt = f.read()
     with open(config.project.prompt_file, 'r') as f: user_prompt = f.read()
@@ -358,10 +358,10 @@ def main():
     with Halo(text=f'Processing ZIP...', spinner='dots'):
         extract_and_report(config.project.zip_path, context_path, report_path, config.processing)
     
-    print(f"Context saved: {context_path}")
+    print(f"  Context saved: {context_path}")
 
     gemini_file, is_cached = get_or_upload_file(context_path)
-    if is_cached: print(f"Using cloud-cached context: {gemini_file.display_name}")
+    if is_cached: print(f"  Using cloud-cached context: {gemini_file.display_name}")
 
     spinner = Halo(text=f'Generating with {config.model.name}...', spinner='dots')
     spinner.start()
@@ -380,7 +380,7 @@ def main():
 
     duration = end_time - start_time
     append_inference_stats(report_path, response, duration, config.model.name)
-    print(f"Report updated: {report_path}")
+    print(f"  Report updated: {report_path}")
 
     # Check if response has valid content before accessing .text
     if response.candidates and response.candidates[0].finish_reason.name != "STOP":
