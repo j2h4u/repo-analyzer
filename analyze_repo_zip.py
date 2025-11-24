@@ -69,8 +69,6 @@ def format_duration(seconds: float) -> str:
         return f"{m}m {s}s"
     return f"{s}s"
 
-# --- 3. CORE LOGIC ---
-
 def build_file_tree(all_files: list, included_files: set) -> str:
     """
     Builds a tree-style directory structure similar to the `tree` command.
@@ -127,6 +125,8 @@ def build_file_tree(all_files: list, included_files: set) -> str:
         return lines
     
     return "\n".join(render(tree))
+
+# --- 3. CORE LOGIC ---
 
 def check_model_availability(model_name: str):
     spinner = Halo(text=f'Verifying model access: {model_name}...', spinner='dots')
