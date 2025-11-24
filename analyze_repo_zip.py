@@ -3,7 +3,6 @@
 import os
 import re
 import zipfile
-import tempfile
 import time
 import hashlib
 import yaml
@@ -72,6 +71,63 @@ def format_duration(seconds: float) -> str:
 
 # --- 3. CORE LOGIC ---
 
+def build_file_tree(all_files: list, included_files: set) -> str:
+    """
+    Builds a tree-style directory structure similar to the `tree` command.
+    Files not in included_files are marked with comment-like "# not attached".
+    """
+    # Build hierarchical structure
+    tree = {}
+    
+    for filepath in all_files:
+        parts = filepath.split('/')
+        current = tree
+        
+        # Navigate through directories
+        for part in parts[:-1]:
+            if part not in current:
+                current[part] = {}
+            current = current[part]
+        
+        # Add the file with marker
+        filename = parts[-1]
+        marker = "" if filepath in included_files else " # not attached"
+        current[filename] = marker  # String value indicates it's a file
+    
+    # Render the tree
+    def render(node, prefix="", name=".", is_last=True):
+        lines = []
+        
+        if isinstance(node, str):
+            # It's a file (leaf node)
+            return []
+        
+        # First line is the directory name
+        if name != ".":
+            connector = "└── " if is_last else "├── "
+            lines.append(f"{prefix}{connector}{name}/")
+            prefix += "    " if is_last else "│   "
+        else:
+            lines.append(".")
+        
+        # Get all items (dirs and files)
+        items = sorted(node.items())
+        
+        for idx, (key, value) in enumerate(items):
+            is_last_item = (idx == len(items) - 1)
+            
+            if isinstance(value, dict):
+                # It's a directory
+                lines.extend(render(value, prefix, key, is_last_item))
+            else:
+                # It's a file
+                connector = "└── " if is_last_item else "├── "
+                lines.append(f"{prefix}{connector}{key}{value}")
+        
+        return lines
+    
+    return "\n".join(render(tree))
+
 def check_model_availability(model_name: str):
     spinner = Halo(text=f'Verifying model access: {model_name}...', spinner='dots')
     spinner.start()
@@ -89,6 +145,7 @@ def check_model_availability(model_name: str):
         spinner.fail(f"API Connection Error: {e}")
         exit(1)
 
+
 def extract_and_report(zip_path: str, output_path: str, report_path: str, cfg: ProcessingConfig):
     valid_exts = tuple(cfg.valid_extensions)
     include_names = set(n.lower() for n in cfg.include_filenames)
@@ -98,10 +155,11 @@ def extract_and_report(zip_path: str, output_path: str, report_path: str, cfg: P
     skipped_no_ext = []
     skipped_by_ext = {}
     encountered_ignore_dirs = set()
+    included_files = []  # Track files that will be included
+    all_files = []  # Track ALL files (for tree generation)
 
-    with open(output_path, 'w', encoding='utf-8') as out_f, \
-         zipfile.ZipFile(zip_path, 'r') as z:
-
+    with zipfile.ZipFile(zip_path, 'r') as z:
+        # First pass: collect all files and determine which are included
         for filename in z.namelist():
             if filename.endswith('/'): continue
 
@@ -116,13 +174,17 @@ def extract_and_report(zip_path: str, output_path: str, report_path: str, cfg: P
                 encountered_ignore_dirs.add(matched_ignore)
                 continue
 
+            # Add to all_files (not ignored)
+            all_files.append(filename)
+
             is_valid = filename.lower().endswith(valid_exts) or \
                        os.path.basename(filename).lower() in include_names
 
             if is_valid:
                 try:
-                    content = z.read(filename).decode('utf-8')
-                    out_f.write(f"--- START FILE: {filename} ---\n{content}\n--- END FILE: {filename} ---\n\n")
+                    # Test if file can be decoded
+                    z.read(filename).decode('utf-8')
+                    included_files.append(filename)
                 except Exception:
                     ext = os.path.splitext(filename)[1].lower()
                     key = f"{filename} (Decode Error)"
@@ -132,6 +194,22 @@ def extract_and_report(zip_path: str, output_path: str, report_path: str, cfg: P
                 ext = os.path.splitext(filename)[1].lower()
                 if not ext: skipped_no_ext.append(filename)
                 else: skipped_by_ext.setdefault(ext, []).append(filename)
+
+        # Second pass: write tree and file contents
+        with open(output_path, 'w', encoding='utf-8') as out_f:
+            # Write file tree (tree-style, showing all files)
+            out_f.write("=== PROJECT FILE TREE ===\n\n")
+            tree_str = build_file_tree(all_files, set(included_files))
+            out_f.write(tree_str)
+            out_f.write(f"\n\nTotal files in archive: {len(all_files)}")
+            out_f.write(f"\nAttached files: {len(included_files)}")
+            out_f.write(f"\nNot attached: {len(all_files) - len(included_files)}\n")
+            out_f.write("\n" + "="*50 + "\n\n")
+
+            # Write file contents
+            for filename in included_files:
+                content = z.read(filename).decode('utf-8')
+                out_f.write(f"--- START FILE: {filename} ---\n{content}\n--- END FILE: {filename} ---\n\n")
 
     # Initial Report Writing
     with open(report_path, 'w', encoding='utf-8') as rep:
@@ -268,6 +346,7 @@ def main():
     timestamp = time.strftime("%Y%m%d-%H%M")
     run_dir = os.path.join(config.project.output_dir, f"{zip_name}-{timestamp}")
     report_path = os.path.join(run_dir, os.path.basename(config.project.report_file))
+    context_path = os.path.join(run_dir, "context.txt")
 
     os.makedirs(run_dir, exist_ok=True)
     print(f"\nOutput directory created: {run_dir}")
@@ -275,46 +354,41 @@ def main():
     with open(config.project.system_prompt_file, 'r') as f: sys_prompt = f.read()
     with open(config.project.prompt_file, 'r') as f: user_prompt = f.read()
 
-    with tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix='.txt', encoding='utf-8') as tmp:
-        temp_txt = tmp.name
+    # Create context file directly (no temp file)
+    with Halo(text=f'Processing ZIP...', spinner='dots'):
+        extract_and_report(config.project.zip_path, context_path, report_path, config.processing)
+    
+    print(f"Context saved: {context_path}")
 
+    gemini_file, is_cached = get_or_upload_file(context_path)
+    if is_cached: print(f"Using cloud-cached context: {gemini_file.display_name}")
+
+    spinner = Halo(text=f'Generating with {config.model.name}...', spinner='dots')
+    spinner.start()
+    start_time = time.time()
     try:
-        with Halo(text=f'Processing ZIP...', spinner='dots'):
-            extract_and_report(config.project.zip_path, temp_txt, report_path, config.processing)
+        model = genai.GenerativeModel(config.model.name)
+        response = model.generate_content(
+            [gemini_file, f"{sys_prompt}\n\nUSER REQUEST:\n{user_prompt}"],
+            request_options={"timeout": config.model.timeout}
+        )
+        end_time = time.time()
+        spinner.succeed("Generation complete!")
+    except Exception as e:
+        spinner.fail(f"Generation failed: {e}")
+        exit(1)
 
-        gemini_file, is_cached = get_or_upload_file(temp_txt)
-        if is_cached: print(f"Using cached context: {gemini_file.display_name}")
+    duration = end_time - start_time
+    append_inference_stats(report_path, response, duration, config.model.name)
+    print(f"Report updated: {report_path}")
 
-        spinner = Halo(text=f'Generating with {config.model.name}...', spinner='dots')
-        spinner.start()
-        start_time = time.time()
-        try:
-            model = genai.GenerativeModel(config.model.name)
-            response = model.generate_content(
-                [gemini_file, f"{sys_prompt}\n\nUSER REQUEST:\n{user_prompt}"],
-                request_options={"timeout": config.model.timeout}
-            )
-            end_time = time.time()
-            spinner.succeed("Generation complete!")
-        except Exception as e:
-            spinner.fail(f"Generation failed: {e}")
-            exit(1)
-
-        duration = end_time - start_time
-        append_inference_stats(report_path, response, duration, config.model.name)
-        print(f"Report updated: {report_path}")
-
+    # Check if response has valid content before accessing .text
+    if response.candidates and response.candidates[0].finish_reason.name != "STOP":
+        reason = response.candidates[0].finish_reason.name
+        print(f"\n⚠️ Response finished with reason: {reason}")
+    else:
         save_generated_files(response.text, run_dir)
-
-        # Save the merged context file for reuse
-        context_path = os.path.join(run_dir, "context.txt")
-        with open(temp_txt, 'r', encoding='utf-8') as src, \
-             open(context_path, 'w', encoding='utf-8') as dst:
-            dst.write(src.read())
-        print(f"Context saved: {context_path}")
-
-    finally:
-        if os.path.exists(temp_txt): os.remove(temp_txt)
 
 if __name__ == "__main__":
     main()
+
