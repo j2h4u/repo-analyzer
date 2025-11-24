@@ -43,7 +43,7 @@ class AppConfig:
     @classmethod
     def load(cls, config_path: str) -> 'AppConfig':
         if not os.path.exists(config_path):
-            print(f"❗️Error: Configuration file '{config_path}' not found.")
+            print_error(f"Error: Configuration file '{config_path}' not found.")
             exit(1)
         with open(config_path, 'r', encoding='utf-8') as f:
             data = yaml.safe_load(f)
@@ -69,6 +69,21 @@ def format_duration(seconds: float) -> str:
     if m > 0:
         return f"{m}m {s}s"
     return f"{s}s"
+
+def print_error(msg: str, indent: int = 0):
+    """Print error message withicon"""
+    prefix = " " * indent
+    print(f"{prefix}❗️{msg}")
+
+def print_warning(msg: str, indent: int = 0):
+    """Print warning message with icon"""
+    prefix = " " * indent
+    print(f"{prefix}⚠️{msg}")
+
+def print_info(msg: str, indent: int = 2):
+    """Print info message with default 2-space indent"""
+    prefix = " " * indent
+    print(f"{prefix}{msg}")
 
 def build_file_tree(all_files: list, included_files: set) -> str:
     """
@@ -143,7 +158,7 @@ def check_model_availability(model_name: str):
             spinner.fail(f"Model '{model_name}' not found.")
             exit(1)
     except Exception as e:
-        spinner.fail(f"❗️API Connection Error: {e}")
+        spinner.fail(f"API Connection Error: {e}")
         exit(1)
 
 def extract_and_report(zip_path: str, output_path: str, report_path: str, cfg: ProcessingConfig):
@@ -359,7 +374,7 @@ def save_generated_files(response_text: str, target_dir: str):
                 f.write(content)
             print(f"    Saved: {filename}")
         except Exception as e:
-            print(f"    ❗️Error: {e}")
+            print_error(f"Error: {e}", indent=4)
 
 # --- 4. MAIN EXECUTION ---
 
@@ -373,7 +388,7 @@ def main():
 
     for p in [config.project.zip_path, config.project.prompt_file, config.project.system_prompt_file]:
         if not os.path.exists(p):
-            print(f"❗️Error: {p} not found"); exit(1)
+            print_error(f"Error: {p} not found"); exit(1)
 
     if config.model.validate_model:
         check_model_availability(config.model.name)
@@ -386,7 +401,7 @@ def main():
     context_path = os.path.join(run_dir, "context.txt")
 
     os.makedirs(run_dir, exist_ok=True)
-    print(f"  Output directory created: {run_dir}")
+    print_info(f"Output directory created: {run_dir}")
 
     with open(config.project.system_prompt_file, 'r') as f: sys_prompt = f.read()
     with open(config.project.prompt_file, 'r') as f: user_prompt = f.read()
@@ -395,10 +410,10 @@ def main():
     with Halo(text=f'Processing ZIP...', spinner='dots'):
         extract_and_report(config.project.zip_path, context_path, report_path, config.processing)
     
-    print(f"  Context saved: {context_path}")
+    print_info(f"Context saved: {context_path}")
 
     gemini_file, is_cached = get_or_upload_file(context_path)
-    if is_cached: print(f"  Using cloud-cached context: {gemini_file.display_name}")
+    if is_cached: print_info(f"Using cloud-cached context: {gemini_file.display_name}")
 
     spinner = Halo(text=f'Generating with {config.model.name}...', spinner='dots')
     spinner.start()
@@ -417,12 +432,12 @@ def main():
 
     duration = end_time - start_time
     append_inference_stats(report_path, response, duration, config.model.name)
-    print(f"  Report updated: {report_path}")
+    print_info(f"Report updated: {report_path}")
 
     # Check if response has valid content before accessing .text
     if response.candidates and response.candidates[0].finish_reason.name != "STOP":
         reason = response.candidates[0].finish_reason.name
-        print(f"\n⚠️ Response finished with reason: {reason}")
+        print_warning(f"Response finished with reason: {reason}")
     else:
         save_generated_files(response.text, run_dir)
 
