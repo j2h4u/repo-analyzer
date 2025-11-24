@@ -26,6 +26,7 @@ class ProjectConfig:
 class ModelConfig:
     name: str
     timeout: int
+    validate_model: bool
 
 @dataclass
 class ProcessingConfig:
@@ -374,7 +375,8 @@ def main():
         if not os.path.exists(p):
             print(f"❗️Error: {p} not found"); exit(1)
 
-    check_model_availability(config.model.name)
+    if config.model.validate_model:
+        check_model_availability(config.model.name)
 
     # Setup Directories
     zip_name = os.path.splitext(os.path.basename(config.project.zip_path))[0]

@@ -18,6 +18,9 @@ model:
   
   # Timeout in seconds (increase for large codebases)
   timeout: 600
+  
+  # Validate model name before processing (set to true only when changing models)
+  validate_model: false
 
 processing:
   # List of file extensions to include in the context
