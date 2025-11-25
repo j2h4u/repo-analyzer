@@ -68,6 +68,10 @@ After each run, a timestamped directory is created in `output/` containing:
 - Use `pip freeze > requirements.txt` to update dependencies
 - Run `get-available-gemini-models.py` to find the best model for your needs
 
+## Development
+> [!NOTE]
+> Before contributing or refactoring, please read [BUSINESS_CONTEXT.md](BUSINESS_CONTEXT.md) to understand the architectural vision and constraints.
+
 ## License
 
 MIT
