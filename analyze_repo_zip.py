@@ -13,6 +13,7 @@ from halo import Halo
 from dataclasses import dataclass
 from typing import Any
 import logging
+from google.api_core import exceptions as google_exceptions
 
 # Logger will be configured in main() after loading config
 logger = logging.getLogger(__name__)
@@ -24,6 +25,7 @@ COLLAPSE_THRESHOLD = 50
 CONTEXT_FILENAME = "context.txt"
 REPORT_FILENAME = "report.txt"
 RESPONSE_FILENAME = "response.txt"
+DEBUG_LOG_FILENAME = "debug.log"
 
 # --- CUSTOM EXCEPTIONS ---
 class RepoAnalyzerError(Exception):
@@ -55,6 +57,16 @@ class ProcessingConfig:
     valid_extensions: list[str]
     include_filenames: list[str]
     ignore_dirs: list[str]
+
+@dataclass
+class InferenceStats:
+    model_name: str
+    duration_seconds: float
+    input_tokens: int
+    output_tokens: int
+    total_tokens: int
+    finish_reason: str
+    token_speed: float
 
 @dataclass
 class LoggingConfig:
@@ -297,40 +309,62 @@ def extract_and_report(zip_path: Path, output_path: Path, report_path: Path, cfg
     write_context(output_path, zip_path, all_files, included_files)
     write_report(report_path, zip_path.name, ignore_dirs, skipped_no, skipped_ext)
 
-def append_inference_stats(report_path: Path, response: Any, duration_sec: float, model_name: str) -> None:
+def extract_inference_stats(response: Any, duration_sec: float, model_name: str) -> InferenceStats:
+    """Extracts statistics from the model response."""
+    input_tokens = 0
+    output_tokens = 0
+    total_tokens = 0
+    finish_reason = "UNKNOWN"
+
+    if hasattr(response, 'usage_metadata'):
+        usage = response.usage_metadata
+        input_tokens = usage.prompt_token_count
+        output_tokens = usage.candidates_token_count
+        total_tokens = usage.total_token_count
+
+    if response.candidates:
+        finish_reason = response.candidates[0].finish_reason.name
+
+    token_speed = output_tokens / duration_sec if duration_sec > 0 else 0.0
+
+    return InferenceStats(
+        model_name=model_name,
+        duration_seconds=duration_sec,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        total_tokens=total_tokens,
+        finish_reason=finish_reason,
+        token_speed=token_speed
+    )
+
+def log_inference_stats(stats: InferenceStats):
+    """Logs inference stats to the logger."""
+    logger.info(f"Inference Stats: {stats}")
+
+def append_inference_stats(report_path: Path, stats: InferenceStats) -> None:
     """
     Appends clean, human-readable stats to the report.
     """
     with report_path.open('a', encoding='utf-8') as rep:
         rep.write(f"--- INFERENCE STATS ---\n")
-        rep.write(f"Model: {model_name}\n")
-        rep.write(f"Duration: {format_duration(duration_sec)}\n")
+        rep.write(f"Model: {stats.model_name}\n")
+        rep.write(f"Duration: {format_duration(stats.duration_seconds)}\n")
 
         # 1. Token Usage
-        if hasattr(response, 'usage_metadata'):
-            usage = response.usage_metadata
-            in_tok = usage.prompt_token_count
-            out_tok = usage.candidates_token_count
-            total_tok = usage.total_token_count
+        # Visual alignment using fixed width (:>6)
+        rep.write(f"Token Usage:\n")
+        rep.write(f"  - Input (context):  {format_token_count(stats.input_tokens):>6} ({stats.input_tokens})\n")
+        rep.write(f"  - Output (gen):     {format_token_count(stats.output_tokens):>6} ({stats.output_tokens})\n")
+        rep.write(f"  - Total:            {format_token_count(stats.total_tokens):>6} ({stats.total_tokens})\n")
 
-            # Visual alignment using fixed width (:>6)
-            rep.write(f"Token Usage:\n")
-            rep.write(f"  - Input (context):  {format_token_count(in_tok):>6} ({in_tok})\n")
-            rep.write(f"  - Output (gen):     {format_token_count(out_tok):>6} ({out_tok})\n")
-            rep.write(f"  - Total:            {format_token_count(total_tok):>6} ({total_tok})\n")
-
-            if duration_sec > 0:
-                speed = out_tok / duration_sec
-                rep.write(f"Token Speed: {int(speed)} tokens/sec (output)\n")
+        if stats.duration_seconds > 0:
+            rep.write(f"Token Speed: {int(stats.token_speed)} tokens/sec (output)\n")
         else:
-            rep.write("Token Usage: N/A\n")
+            rep.write("Token Speed: N/A\n")
 
         # Finish Reason
-        if response.candidates:
-            reason = response.candidates[0].finish_reason
-            # Enum to string map if needed, but usually str(reason) is readable like FinishReason.STOP
-            if reason.name != "STOP":
-                rep.write(f"Finish Reason: {reason.name}\n")
+        if stats.finish_reason != "STOP":
+            rep.write(f"Finish Reason: {stats.finish_reason}\n")
 
 def get_or_upload_file(local_path: Path) -> tuple[Any, bool]:
     def get_hash(fp):
@@ -522,13 +556,31 @@ def main() -> None:
 
         config = AppConfig.load("config.yaml")
         
-        # Configure logging based on config
-        log_level = getattr(logging, config.logging.level.upper(), logging.INFO)
+        # Setup Directories first to know where to log
+        zip_name = config.project.zip_path.stem
+        timestamp = time.strftime("%Y%m%d-%H%M")
+        run_dir = config.project.output_dir / f"{zip_name}-{timestamp}"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Configure logging
+        config_log_level = getattr(logging, config.logging.level.upper(), logging.INFO)
+        
+        # Create handlers
+        file_handler = logging.FileHandler(run_dir / DEBUG_LOG_FILENAME, encoding='utf-8')
+        file_handler.setLevel(logging.DEBUG)
+        
+        console_handler = logging.StreamHandler()
+        console_handler.setLevel(config_log_level)
+        
+        # Configure basic config with both handlers
         logging.basicConfig(
-            level=log_level,
-            format='%(levelname)s [%(funcName)s]: %(message)s',
-            force=True  # Override any existing config
+            level=logging.DEBUG,
+            format='%(asctime)s - %(levelname)s - %(name)s - %(message)s',
+            handlers=[file_handler, console_handler],
+            force=True
         )
+        
+        print_info(f"Output directory created: {run_dir}")
 
         for p in [config.project.zip_path, config.project.prompt_file, config.project.system_prompt_file]:
             if not p.exists():
@@ -538,15 +590,8 @@ def main() -> None:
         if config.model.validate_model:
             check_model_availability(config.model.name)
 
-        # Setup Directories
-        zip_name = config.project.zip_path.stem
-        timestamp = time.strftime("%Y%m%d-%H%M")
-        run_dir = config.project.output_dir / f"{zip_name}-{timestamp}"
         report_path = run_dir / config.project.report_file
         context_path = run_dir / CONTEXT_FILENAME
-
-        run_dir.mkdir(parents=True, exist_ok=True)
-        print_info(f"Output directory created: {run_dir}")
 
         with config.project.system_prompt_file.open('r', encoding='utf-8') as f:
             sys_prompt = f.read()
@@ -573,6 +618,13 @@ def main() -> None:
             )
             end_time = time.time()
             spinner.succeed("Generation complete!")
+        except google_exceptions.DeadlineExceeded as e:
+            end_time = time.time()
+            elapsed = end_time - start_time
+            spinner.fail(f"Generation timed out after {format_duration(elapsed)}")
+            logger.debug(f"API Timeout details: {e}")
+            print_error("The model took too long to respond (Timeout). Try increasing the timeout in config.yaml.")
+            exit(1)
         except Exception as e:
             end_time = time.time()
             elapsed = end_time - start_time
@@ -580,7 +632,12 @@ def main() -> None:
             raise e
 
         duration = end_time - start_time
-        append_inference_stats(report_path, response, duration, config.model.name)
+        
+        # Process stats
+        stats = extract_inference_stats(response, duration, config.model.name)
+        log_inference_stats(stats)
+        append_inference_stats(report_path, stats)
+        
         print_info(f"Report updated: {report_path}")
 
         # Save raw model response for debugging
@@ -603,6 +660,7 @@ def main() -> None:
         exit(1)
     except Exception as e:
         print_error(f"Unexpected Error: {e}")
+        logger.debug("Unexpected error occurred", exc_info=True)
         exit(1)
 
 if __name__ == "__main__":
