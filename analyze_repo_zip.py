@@ -545,121 +545,142 @@ def save_files_to_disk(files: list[GeneratedFile], target_dir: Path) -> None:
 
 # --- 4. MAIN EXECUTION ---
 
+def setup_logging(run_dir: Path, config_log_level: str) -> None:
+    """Configure logging with file and console handlers."""
+    log_level = getattr(logging, config_log_level.upper(), logging.INFO)
+    
+    # Create formatters
+    file_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(funcName)s - %(message)s')
+    console_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(funcName)s - %(message)s', datefmt='%H:%M:%S')
+    
+    # Create handlers
+    file_handler = logging.FileHandler(run_dir / DEBUG_LOG_FILENAME, encoding='utf-8')
+    file_handler.setLevel(logging.DEBUG)
+    file_handler.setFormatter(file_formatter)
+    
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(log_level)
+    console_handler.setFormatter(console_formatter)
+    
+    # Configure basic config with both handlers
+    logging.basicConfig(
+        level=logging.DEBUG,
+        handlers=[file_handler, console_handler],
+        force=True
+    )
+
+def initialize_app() -> tuple[AppConfig, Path]:
+    """Initialize app configuration and create output directory."""
+    load_dotenv()
+    api_key = os.getenv("GOOGLE_API_KEY")
+    if not api_key:
+        print_error("GOOGLE_API_KEY not found in environment variables.")
+        exit(1)
+    genai.configure(api_key=api_key)
+
+    config = AppConfig.load("config.yaml")
+    
+    # Setup output directory
+    zip_name = config.project.zip_path.stem
+    timestamp = time.strftime("%Y%m%d-%H%M")
+    run_dir = config.project.output_dir / f"{zip_name}-{timestamp}"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    
+    return config, run_dir
+
+def validate_files(config: AppConfig) -> None:
+    """Validate that required files exist and optionally check model availability."""
+    for p in [config.project.zip_path, config.project.prompt_file, config.project.system_prompt_file]:
+        if not p.exists():
+            print_error(f"Error: {p} not found")
+            exit(1)
+
+    if config.model.validate_model:
+        check_model_availability(config.model.name)
+
+def prepare_context(config: AppConfig, run_dir: Path) -> tuple[Path, Path]:
+    """Prepare context file and return paths."""
+    report_path = run_dir / config.project.report_file
+    context_path = run_dir / CONTEXT_FILENAME
+
+    # Create context file
+    with Halo(text=f'Processing ZIP...', spinner='dots'):
+        extract_and_report(config.project.zip_path, context_path, report_path, config.processing)
+    
+    print_info(f"Context saved: {context_path}")
+    return context_path, report_path
+
+def run_inference(model_config: ModelConfig, gemini_file: Any, sys_prompt: str, user_prompt: str) -> tuple[Any, float]:
+    """Run model inference and return response with duration."""
+    spinner = Halo(text=f'Generating with {model_config.name}...', spinner='dots')
+    spinner.start()
+    start_time = time.time()
+    
+    try:
+        model = genai.GenerativeModel(model_config.name)
+        response = model.generate_content(
+            [gemini_file, f"{sys_prompt}\n\nUSER REQUEST:\n{user_prompt}"],
+            request_options={"timeout": model_config.timeout}
+        )
+        end_time = time.time()
+        spinner.succeed("Generation complete!")
+        return response, end_time - start_time
+    except google_exceptions.DeadlineExceeded as e:
+        end_time = time.time()
+        elapsed = end_time - start_time
+        spinner.fail(f"Generation timed out after {format_duration(elapsed)}")
+        logger.debug(f"API Timeout details: {e}")
+        print_error("The model took too long to respond (Timeout). Try increasing the timeout in config.yaml.")
+        exit(1)
+    except Exception as e:
+        end_time = time.time()
+        elapsed = end_time - start_time
+        spinner.fail(f"Generation failed after {format_duration(elapsed)}: {e}")
+        raise e
+
+def process_response(response: Any, run_dir: Path, report_path: Path, stats: InferenceStats) -> None:
+    """Process model response: log stats, save response, and extract files."""
+    # Process stats
+    log_inference_stats(stats)
+    append_inference_stats(report_path, stats)
+    print_info(f"Report updated: {report_path}")
+
+    # Save raw model response
+    response_path = run_dir / RESPONSE_FILENAME
+    with response_path.open('w', encoding='utf-8') as f:
+        f.write(response.text)
+    print_info(f"Raw response saved: {response_path}")
+
+    # Check if response has valid content
+    if response.candidates and response.candidates[0].finish_reason.name != "STOP":
+        reason = response.candidates[0].finish_reason.name
+        print_warning(f"Response finished with reason: {reason}")
+    else:
+        files = parse_generated_files(response.text)
+        unique_files = resolve_file_conflicts(files)
+        save_files_to_disk(unique_files, run_dir)
+
 def main() -> None:
     try:
-        load_dotenv()
-        api_key = os.getenv("GOOGLE_API_KEY")
-        if not api_key:
-            print_error("GOOGLE_API_KEY not found in environment variables.")
-            exit(1)
-        genai.configure(api_key=api_key)
-
-        config = AppConfig.load("config.yaml")
-        
-        # Setup Directories first to know where to log
-        zip_name = config.project.zip_path.stem
-        timestamp = time.strftime("%Y%m%d-%H%M")
-        run_dir = config.project.output_dir / f"{zip_name}-{timestamp}"
-        run_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Configure logging
-        config_log_level = getattr(logging, config.logging.level.upper(), logging.INFO)
-        
-        # Create formatters
-        file_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(funcName)s - %(message)s')
-        console_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(funcName)s - %(message)s', datefmt='%H:%M:%S')
-        
-        # Create handlers
-        file_handler = logging.FileHandler(run_dir / DEBUG_LOG_FILENAME, encoding='utf-8')
-        file_handler.setLevel(logging.DEBUG)
-        file_handler.setFormatter(file_formatter)
-        
-        console_handler = logging.StreamHandler()
-        console_handler.setLevel(config_log_level)
-        console_handler.setFormatter(console_formatter)
-        
-        # Configure basic config with both handlers
-        logging.basicConfig(
-            level=logging.DEBUG,
-            handlers=[file_handler, console_handler],
-            force=True
-        )
-        
+        config, run_dir = initialize_app()
+        setup_logging(run_dir, config.logging.level)
         print_info(f"Output directory created: {run_dir}")
-
-        for p in [config.project.zip_path, config.project.prompt_file, config.project.system_prompt_file]:
-            if not p.exists():
-                print_error(f"Error: {p} not found")
-                exit(1)
-
-        if config.model.validate_model:
-            check_model_availability(config.model.name)
-
-        report_path = run_dir / config.project.report_file
-        context_path = run_dir / CONTEXT_FILENAME
-
-        with config.project.system_prompt_file.open('r', encoding='utf-8') as f:
-            sys_prompt = f.read()
-        with config.project.prompt_file.open('r', encoding='utf-8') as f:
-            user_prompt = f.read()
-
-        # Create context file directly (no temp file)
-        with Halo(text=f'Processing ZIP...', spinner='dots'):
-            extract_and_report(config.project.zip_path, context_path, report_path, config.processing)
         
-        print_info(f"Context saved: {context_path}")
-
+        validate_files(config)
+        context_path, report_path = prepare_context(config, run_dir)
+        
         gemini_file, is_cached = get_or_upload_file(context_path)
-        if is_cached: print_info(f"Using cloud-cached context: {gemini_file.display_name}")
-
-        spinner = Halo(text=f'Generating with {config.model.name}...', spinner='dots')
-        spinner.start()
-        start_time = time.time()
-        try:
-            model = genai.GenerativeModel(config.model.name)
-            response = model.generate_content(
-                [gemini_file, f"{sys_prompt}\n\nUSER REQUEST:\n{user_prompt}"],
-                request_options={"timeout": config.model.timeout}
-            )
-            end_time = time.time()
-            spinner.succeed("Generation complete!")
-        except google_exceptions.DeadlineExceeded as e:
-            end_time = time.time()
-            elapsed = end_time - start_time
-            spinner.fail(f"Generation timed out after {format_duration(elapsed)}")
-            logger.debug(f"API Timeout details: {e}")
-            print_error("The model took too long to respond (Timeout). Try increasing the timeout in config.yaml.")
-            exit(1)
-        except Exception as e:
-            end_time = time.time()
-            elapsed = end_time - start_time
-            spinner.fail(f"Generation failed after {format_duration(elapsed)}: {e}")
-            raise e
-
-        duration = end_time - start_time
+        if is_cached:
+            print_info(f"Using cloud-cached context: {gemini_file.display_name}")
         
-        # Process stats
+        sys_prompt = config.project.system_prompt_file.read_text(encoding='utf-8')
+        user_prompt = config.project.prompt_file.read_text(encoding='utf-8')
+        
+        response, duration = run_inference(config.model, gemini_file, sys_prompt, user_prompt)
+        
         stats = extract_inference_stats(response, duration, config.model.name)
-        log_inference_stats(stats)
-        append_inference_stats(report_path, stats)
+        process_response(response, run_dir, report_path, stats)
         
-        print_info(f"Report updated: {report_path}")
-
-        # Save raw model response for debugging
-        response_path = run_dir / RESPONSE_FILENAME
-        with response_path.open('w', encoding='utf-8') as f:
-            f.write(response.text)
-        print_info(f"Raw response saved: {response_path}")
-
-        # Check if response has valid content before accessing .text
-        if response.candidates and response.candidates[0].finish_reason.name != "STOP":
-            reason = response.candidates[0].finish_reason.name
-            print_warning(f"Response finished with reason: {reason}")
-        else:
-            files = parse_generated_files(response.text)
-            unique_files = resolve_file_conflicts(files)
-            save_files_to_disk(unique_files, run_dir)
-
     except RepoAnalyzerError as e:
         print_error(f"Error: {e}")
         exit(1)
