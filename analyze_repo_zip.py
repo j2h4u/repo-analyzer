@@ -375,6 +375,62 @@ def parse_generated_files(response_text: str) -> list[GeneratedFile]:
         for filename, content in matches
     ]
 
+def resolve_duplicate_filename(
+    target_path: Path,
+    content: str,
+    original_filename: str,
+    base_dir: Path
+) -> tuple[Path | None, str]:
+    """
+    Resolves filename conflicts by finding a unique numbered name or detecting duplicates.
+    
+    Args:
+        target_path: The desired path for the file.
+        content: Content of the file to save.
+        original_filename: Original filename from the GeneratedFile (for display).
+        base_dir: Base directory for security checks.
+        
+    Returns:
+        (final_path, display_name) if file should be saved.
+        (None, None) if file is a duplicate and should be skipped.
+    """
+    # File doesn't exist, use original path
+    if not target_path.exists():
+        return target_path, original_filename
+    
+    # File exists, check content
+    with target_path.open('r', encoding='utf-8') as f:
+        existing_content = f.read()
+    
+    if existing_content == content:
+        # Same content, skip
+        print(f"    Skipped: {original_filename} (duplicate)")
+        return None, None
+    
+    # Different content, find a new numbered name
+    relative_path = Path(original_filename)
+    parent_dir = relative_path.parent
+    base = target_path.stem
+    ext = target_path.suffix
+    counter = 1
+    
+    while True:
+        # Create new filename preserving directory structure
+        new_name = f"{base}.{counter}{ext}"
+        new_relative_path = parent_dir / new_name
+        new_full_path = (base_dir / new_relative_path).resolve()
+        
+        if not new_full_path.exists():
+            return new_full_path, str(new_relative_path)
+        
+        # Check if this numbered file also has the same content
+        with new_full_path.open('r', encoding='utf-8') as f:
+            if f.read() == content:
+                print(f"    Skipped: {original_filename} (duplicate of {new_relative_path})")
+                return None, None
+        
+        counter += 1
+
 def save_files_to_disk(files: list[GeneratedFile], target_dir: Path) -> None:
     """
     Saves a list of GeneratedFile objects to disk.
@@ -400,53 +456,19 @@ def save_files_to_disk(files: list[GeneratedFile], target_dir: Path) -> None:
         full_path.parent.mkdir(parents=True, exist_ok=True)
         
         try:
-            # Track the actual filename we'll use for output
-            output_filename = file.filename
+            # Resolve duplicate filenames
+            final_path, display_name = resolve_duplicate_filename(
+                full_path, file.content, file.filename, safe_dir
+            )
             
-            # Check if file exists and compare content
-            if full_path.exists():
-                with full_path.open('r', encoding='utf-8') as f:
-                    existing_content = f.read()
-                
-                if existing_content == file.content:
-                    # Same content, skip
-                    print(f"    Skipped: {file.filename} (duplicate)")
-                    continue
-                else:
-                    # Different content, find a new name with suffix
-                    # Preserve the relative path from safe_dir
-                    relative_path = Path(file.filename)
-                    parent_dir = relative_path.parent
-                    base = full_path.stem
-                    ext = full_path.suffix
-                    counter = 1
-                    
-                    while True:
-                        # Create new filename preserving directory structure
-                        new_name = f"{base}.{counter}{ext}"
-                        new_relative_path = parent_dir / new_name
-                        new_full_path = (safe_dir / new_relative_path).resolve()
-                        
-                        if not new_full_path.exists():
-                            full_path = new_full_path
-                            output_filename = str(new_relative_path)
-                            break
-                        
-                        # Check if this numbered file also has the same content
-                        with new_full_path.open('r', encoding='utf-8') as f:
-                            if f.read() == file.content:
-                                print(f"    Skipped: {file.filename} (duplicate of {new_relative_path})")
-                                break
-                        
-                        counter += 1
-                    else:
-                        # This else belongs to while, executes if we didn't break
-                        continue
+            # Skip if file is a duplicate
+            if final_path is None:
+                continue
             
             # Save the file
-            with full_path.open('w', encoding='utf-8') as f:
+            with final_path.open('w', encoding='utf-8') as f:
                 f.write(file.content)
-            print(f"    Saved: {output_filename}")
+            print(f"    Saved: {display_name}")
         except Exception as e:
             print_error(f"Error: {e}", indent=4)
 
