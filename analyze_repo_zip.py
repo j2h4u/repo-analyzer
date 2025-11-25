@@ -339,7 +339,7 @@ def extract_inference_stats(response: Any, duration_sec: float, model_name: str)
 
 def log_inference_stats(stats: InferenceStats):
     """Logs inference stats to the logger."""
-    logger.info(f"Inference Stats: {stats}")
+    logger.info(stats)
 
 def append_inference_stats(report_path: Path, stats: InferenceStats) -> None:
     """
@@ -565,17 +565,22 @@ def main() -> None:
         # Configure logging
         config_log_level = getattr(logging, config.logging.level.upper(), logging.INFO)
         
+        # Create formatters
+        file_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(funcName)s - %(message)s')
+        console_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(funcName)s - %(message)s', datefmt='%H:%M:%S')
+        
         # Create handlers
         file_handler = logging.FileHandler(run_dir / DEBUG_LOG_FILENAME, encoding='utf-8')
         file_handler.setLevel(logging.DEBUG)
+        file_handler.setFormatter(file_formatter)
         
         console_handler = logging.StreamHandler()
         console_handler.setLevel(config_log_level)
+        console_handler.setFormatter(console_formatter)
         
         # Configure basic config with both handlers
         logging.basicConfig(
             level=logging.DEBUG,
-            format='%(asctime)s - %(levelname)s - %(name)s - %(message)s',
             handlers=[file_handler, console_handler],
             force=True
         )
