@@ -10,8 +10,8 @@ import google.generativeai as genai
 from pathlib import Path
 from dotenv import load_dotenv
 from halo import Halo
-from typing import List
 from dataclasses import dataclass
+from typing import Any
 
 # --- CONSTANTS ---
 COLLAPSE_THRESHOLD = 50
@@ -109,7 +109,7 @@ def print_info(msg: str, indent: int = 2):
     prefix = " " * indent
     print(f"{prefix}{msg}")
 
-def build_file_tree(all_files: list, included_files: set) -> str:
+def build_file_tree(all_files: list[str], included_files: set[str]) -> str:
     """
     Builds a tree-style directory structure similar to the `tree` command.
     Files not in included_files are marked with comment-like "# not attached".
@@ -185,7 +185,7 @@ def check_model_availability(model_name: str):
         spinner.fail(f"API Connection Error: {e}")
         raise ConnectionError(f"API Connection Error: {e}")
 
-def scan_zip(zip_path: Path, cfg: ProcessingConfig):
+def scan_zip(zip_path: Path, cfg: ProcessingConfig) -> tuple[list[str], list[str], set[str], list[str], dict[str, list[str]]]:
     """Scans zip file and returns file lists and stats."""
     valid_exts = tuple(cfg.valid_extensions)
     include_names = set(n.lower() for n in cfg.include_filenames)
@@ -232,7 +232,7 @@ def scan_zip(zip_path: Path, cfg: ProcessingConfig):
     
     return all_files, included_files, encountered_ignore_dirs, skipped_no_ext, skipped_by_ext
 
-def write_context(output_path: Path, zip_path: Path, all_files: list, included_files: list):
+def write_context(output_path: Path, zip_path: Path, all_files: list[str], included_files: list[str]) -> None:
     """Writes the context file with tree and file contents."""
     with output_path.open('w', encoding='utf-8') as out_f:
         out_f.write("=== PROJECT FILE TREE ===\n\n")
@@ -248,7 +248,7 @@ def write_context(output_path: Path, zip_path: Path, all_files: list, included_f
                 content = z.read(filename).decode('utf-8')
                 out_f.write(f"--- START FILE: {filename} ---\n{content}\n--- END FILE: {filename} ---\n\n")
 
-def write_report(report_path: Path, zip_name: str, ignore_dirs: set, skipped_no_ext: list, skipped_by_ext: dict):
+def write_report(report_path: Path, zip_name: str, ignore_dirs: set[str], skipped_no_ext: list[str], skipped_by_ext: dict[str, list[str]]) -> None:
     """Writes the execution report."""
     with report_path.open('w', encoding='utf-8') as rep:
         rep.write(f"--- EXECUTION REPORT ---\n")
@@ -276,13 +276,13 @@ def write_report(report_path: Path, zip_name: str, ignore_dirs: set, skipped_no_
                 for f in sorted(files): rep.write(f"    * {f}\n")
         rep.write("\n")
 
-def extract_and_report(zip_path: Path, output_path: Path, report_path: Path, cfg: ProcessingConfig):
+def extract_and_report(zip_path: Path, output_path: Path, report_path: Path, cfg: ProcessingConfig) -> None:
     all_files, included_files, ignore_dirs, skipped_no, skipped_ext = scan_zip(zip_path, cfg)
     
     write_context(output_path, zip_path, all_files, included_files)
     write_report(report_path, zip_path.name, ignore_dirs, skipped_no, skipped_ext)
 
-def append_inference_stats(report_path: str, response, duration_sec: float, model_name: str):
+def append_inference_stats(report_path: Path, response: Any, duration_sec: float, model_name: str) -> None:
     """
     Appends clean, human-readable stats to the report.
     """
@@ -317,7 +317,7 @@ def append_inference_stats(report_path: str, response, duration_sec: float, mode
             if reason.name != "STOP":
                 rep.write(f"Finish Reason: {reason.name}\n")
 
-def get_or_upload_file(local_path: Path):
+def get_or_upload_file(local_path: Path) -> tuple[Any, bool]:
     def get_hash(fp):
         h = hashlib.md5()
         with open(fp, "rb") as f:
@@ -346,7 +346,7 @@ def get_or_upload_file(local_path: Path):
         spinner.fail(f"Upload error: {e}")
         raise e
 
-def save_generated_files(response_text: str, target_dir: Path):
+def save_generated_files(response_text: str, target_dir: Path) -> None:
     matches = re.findall(r"--- START OUTPUT: (.*?) ---\n(.*?)--- END OUTPUT: \1 ---", response_text, re.DOTALL)
     if not matches:
         print("\n--- NO FILES DETECTED ---")
@@ -407,7 +407,7 @@ def save_generated_files(response_text: str, target_dir: Path):
 
 # --- 4. MAIN EXECUTION ---
 
-def main():
+def main() -> None:
     try:
         load_dotenv()
         api_key = os.getenv("GOOGLE_API_KEY")
