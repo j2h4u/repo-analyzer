@@ -348,6 +348,7 @@ def get_or_upload_file(local_path: Path) -> tuple[Any, bool]:
 
 def save_generated_files(response_text: str, target_dir: Path) -> None:
     matches = re.findall(r"--- START OUTPUT: (.*?) ---\n(.*?)--- END OUTPUT: \1 ---", response_text, re.DOTALL)
+
     if not matches:
         print("\n--- NO FILES DETECTED ---")
         return
@@ -468,6 +469,12 @@ def main() -> None:
         duration = end_time - start_time
         append_inference_stats(report_path, response, duration, config.model.name)
         print_info(f"Report updated: {report_path}")
+
+        # Save raw model response for debugging
+        response_path = run_dir / "response.txt"
+        with response_path.open('w', encoding='utf-8') as f:
+            f.write(response.text)
+        print_info(f"Raw response saved: {response_path}")
 
         # Check if response has valid content before accessing .text
         if response.candidates and response.candidates[0].finish_reason.name != "STOP":
