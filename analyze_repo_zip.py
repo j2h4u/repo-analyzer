@@ -476,17 +476,21 @@ def save_files_to_disk(files: list[GeneratedFile], target_dir: Path) -> None:
         target_dir: Target directory to save files to.
     """
     if not files:
-        print("\n--- NO FILES DETECTED ---")
+        logger.warning("No files to save")
         return
 
-    print(f"\n  Found {len(files)} file(s). Saving to '{target_dir}'...")
+    logger.info(f"Saving {len(files)} files to '{target_dir}'")
     safe_dir = target_dir.resolve()
+    
+    saved_count = 0
+    error_count = 0
 
     for file in files:
         full_path = (safe_dir / file.filename).resolve()
         
         # Security check: prevent path traversal
         if not str(full_path).startswith(str(safe_dir)):
+            logger.warning(f"Path traversal attempt blocked: {file.filename}")
             continue
 
         full_path.parent.mkdir(parents=True, exist_ok=True)
@@ -494,9 +498,16 @@ def save_files_to_disk(files: list[GeneratedFile], target_dir: Path) -> None:
         try:
             with full_path.open('w', encoding='utf-8') as f:
                 f.write(file.content)
-            print(f"    Saved: {file.filename}")
+            logger.debug(f"Saved: {file.filename}")
+            saved_count += 1
         except Exception as e:
-            print_error(f"Error: {e}", indent=4)
+            logger.error(f"Failed to save {file.filename}: {e}")
+            error_count += 1
+    
+    if error_count > 0:
+        logger.warning(f"Saved {saved_count}/{len(files)} files ({error_count} errors)")
+    else:
+        logger.info(f"Successfully saved all {saved_count} files")
 
 # --- 4. MAIN EXECUTION ---
 
