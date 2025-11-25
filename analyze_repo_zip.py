@@ -7,19 +7,32 @@ import time
 import hashlib
 import yaml
 import google.generativeai as genai
+from pathlib import Path
 from dotenv import load_dotenv
 from halo import Halo
-from dataclasses import dataclass
 from typing import List
+from dataclasses import dataclass
+
+# --- CONSTANTS ---
+COLLAPSE_THRESHOLD = 50
+
+# --- CUSTOM EXCEPTIONS ---
+class RepoAnalyzerError(Exception):
+    """Base exception for repo analyzer errors."""
+    pass
+
+class ConfigError(RepoAnalyzerError):
+    """Configuration loading error."""
+    pass
 
 # --- 1. CONFIGURATION STRUCTS ---
 
 @dataclass
 class ProjectConfig:
-    zip_path: str
-    prompt_file: str
-    system_prompt_file: str
-    output_dir: str
+    zip_path: Path
+    prompt_file: Path
+    system_prompt_file: Path
+    output_dir: Path
     report_file: str
 
 @dataclass
@@ -30,9 +43,9 @@ class ModelConfig:
 
 @dataclass
 class ProcessingConfig:
-    valid_extensions: List[str]
-    include_filenames: List[str]
-    ignore_dirs: List[str]
+    valid_extensions: list[str]
+    include_filenames: list[str]
+    ignore_dirs: list[str]
 
 @dataclass
 class AppConfig:
@@ -41,14 +54,25 @@ class AppConfig:
     processing: ProcessingConfig
 
     @classmethod
-    def load(cls, config_path: str) -> 'AppConfig':
-        if not os.path.exists(config_path):
-            print_error(f"Error: Configuration file '{config_path}' not found.")
-            exit(1)
-        with open(config_path, 'r', encoding='utf-8') as f:
-            data = yaml.safe_load(f)
+    def load(cls, config_path: Path | str) -> 'AppConfig':
+        path = Path(config_path)
+        if not path.exists():
+            raise ConfigError(f"Configuration file '{path}' not found.")
+        
+        try:
+            with path.open('r', encoding='utf-8') as f:
+                data = yaml.safe_load(f)
+        except yaml.YAMLError as e:
+            raise ConfigError(f"Error parsing YAML: {e}")
+
         return cls(
-            project=ProjectConfig(**data['project']),
+            project=ProjectConfig(
+                zip_path=Path(data['project']['zip_path']),
+                prompt_file=Path(data['project']['prompt_file']),
+                system_prompt_file=Path(data['project']['system_prompt_file']),
+                output_dir=Path(data['project']['output_dir']),
+                report_file=data['project']['report_file']
+            ),
             model=ModelConfig(**data['model']),
             processing=ProcessingConfig(**data['processing'])
         )
@@ -156,32 +180,30 @@ def check_model_availability(model_name: str):
         if found: spinner.succeed(f"Model '{model_name}' is valid.")
         else:
             spinner.fail(f"Model '{model_name}' not found.")
-            exit(1)
+            raise ValueError(f"Model '{model_name}' not found.")
     except Exception as e:
         spinner.fail(f"API Connection Error: {e}")
-        exit(1)
+        raise ConnectionError(f"API Connection Error: {e}")
 
-def extract_and_report(zip_path: str, output_path: str, report_path: str, cfg: ProcessingConfig):
+def scan_zip(zip_path: Path, cfg: ProcessingConfig):
+    """Scans zip file and returns file lists and stats."""
     valid_exts = tuple(cfg.valid_extensions)
     include_names = set(n.lower() for n in cfg.include_filenames)
     ignore_dirs = cfg.ignore_dirs
-    COLLAPSE_THRESHOLD = 50
 
     skipped_no_ext = []
     skipped_by_ext = {}
     encountered_ignore_dirs = set()
-    included_files = []  # Track files that will be included
-    all_files = []  # Track ALL files (for tree generation)
+    included_files = []
+    all_files = []
 
     with zipfile.ZipFile(zip_path, 'r') as z:
-        # First pass: collect all files and determine which are included
         for filename in z.namelist():
             if filename.endswith('/'): continue
 
-            # Logic to track WHICH ignored dir matched
             matched_ignore = None
             for d in ignore_dirs:
-                if d in filename: # Simple substring check for dir
+                if d in filename:
                     matched_ignore = d
                     break
 
@@ -189,54 +211,54 @@ def extract_and_report(zip_path: str, output_path: str, report_path: str, cfg: P
                 encountered_ignore_dirs.add(matched_ignore)
                 continue
 
-            # Add to all_files (not ignored)
             all_files.append(filename)
 
             is_valid = filename.lower().endswith(valid_exts) or \
-                       os.path.basename(filename).lower() in include_names
+                       Path(filename).name.lower() in include_names
 
             if is_valid:
                 try:
-                    # Test if file can be decoded
                     z.read(filename).decode('utf-8')
                     included_files.append(filename)
                 except Exception:
-                    ext = os.path.splitext(filename)[1].lower()
+                    ext = Path(filename).suffix.lower()
                     key = f"{filename} (Decode Error)"
                     if ext: skipped_by_ext.setdefault(ext, []).append(key)
                     else: skipped_no_ext.append(key)
             else:
-                ext = os.path.splitext(filename)[1].lower()
+                ext = Path(filename).suffix.lower()
                 if not ext: skipped_no_ext.append(filename)
                 else: skipped_by_ext.setdefault(ext, []).append(filename)
+    
+    return all_files, included_files, encountered_ignore_dirs, skipped_no_ext, skipped_by_ext
 
-        # Second pass: write tree and file contents
-        with open(output_path, 'w', encoding='utf-8') as out_f:
-            # Write file tree (tree-style, showing all files)
-            out_f.write("=== PROJECT FILE TREE ===\n\n")
-            tree_str = build_file_tree(all_files, set(included_files))
-            out_f.write(tree_str)
-            out_f.write(f"\n\nTotal files in archive: {len(all_files)}")
-            out_f.write(f"\nAttached files: {len(included_files)}")
-            out_f.write(f"\nNot attached: {len(all_files) - len(included_files)}\n")
-            out_f.write("\n" + "="*50 + "\n\n")
+def write_context(output_path: Path, zip_path: Path, all_files: list, included_files: list):
+    """Writes the context file with tree and file contents."""
+    with output_path.open('w', encoding='utf-8') as out_f:
+        out_f.write("=== PROJECT FILE TREE ===\n\n")
+        tree_str = build_file_tree(all_files, set(included_files))
+        out_f.write(tree_str)
+        out_f.write(f"\n\nTotal files in archive: {len(all_files)}")
+        out_f.write(f"\nAttached files: {len(included_files)}")
+        out_f.write(f"\nNot attached: {len(all_files) - len(included_files)}\n")
+        out_f.write("\n" + "="*50 + "\n\n")
 
-            # Write file contents
+        with zipfile.ZipFile(zip_path, 'r') as z:
             for filename in included_files:
                 content = z.read(filename).decode('utf-8')
                 out_f.write(f"--- START FILE: {filename} ---\n{content}\n--- END FILE: {filename} ---\n\n")
 
-    # Initial Report Writing
-    with open(report_path, 'w', encoding='utf-8') as rep:
+def write_report(report_path: Path, zip_name: str, ignore_dirs: set, skipped_no_ext: list, skipped_by_ext: dict):
+    """Writes the execution report."""
+    with report_path.open('w', encoding='utf-8') as rep:
         rep.write(f"--- EXECUTION REPORT ---\n")
         rep.write(f"Date: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-        rep.write(f"Source: {os.path.basename(zip_path)}\n\n")
+        rep.write(f"Source: {zip_name}\n\n")
 
         rep.write(f"--- SKIPPED FILES (Noise Reduction) ---\n")
 
-        if encountered_ignore_dirs:
-            # Format with trailing slash
-            sorted_dirs = sorted([f"{d}/" for d in encountered_ignore_dirs])
+        if ignore_dirs:
+            sorted_dirs = sorted([f"{d}/" for d in ignore_dirs])
             rep.write(f"Ignored Folders: {', '.join(sorted_dirs)}\n")
         else:
             rep.write(f"Ignored Folders: None encountered\n")
@@ -254,11 +276,17 @@ def extract_and_report(zip_path: str, output_path: str, report_path: str, cfg: P
                 for f in sorted(files): rep.write(f"    * {f}\n")
         rep.write("\n")
 
+def extract_and_report(zip_path: Path, output_path: Path, report_path: Path, cfg: ProcessingConfig):
+    all_files, included_files, ignore_dirs, skipped_no, skipped_ext = scan_zip(zip_path, cfg)
+    
+    write_context(output_path, zip_path, all_files, included_files)
+    write_report(report_path, zip_path.name, ignore_dirs, skipped_no, skipped_ext)
+
 def append_inference_stats(report_path: str, response, duration_sec: float, model_name: str):
     """
     Appends clean, human-readable stats to the report.
     """
-    with open(report_path, 'a', encoding='utf-8') as rep:
+    with report_path.open('a', encoding='utf-8') as rep:
         rep.write(f"--- INFERENCE STATS ---\n")
         rep.write(f"Model: {model_name}\n")
         rep.write(f"Duration: {format_duration(duration_sec)}\n")
@@ -289,7 +317,7 @@ def append_inference_stats(report_path: str, response, duration_sec: float, mode
             if reason.name != "STOP":
                 rep.write(f"Finish Reason: {reason.name}\n")
 
-def get_or_upload_file(local_path: str):
+def get_or_upload_file(local_path: Path):
     def get_hash(fp):
         h = hashlib.md5()
         with open(fp, "rb") as f:
@@ -318,27 +346,27 @@ def get_or_upload_file(local_path: str):
         spinner.fail(f"Upload error: {e}")
         raise e
 
-def save_generated_files(response_text: str, target_dir: str):
+def save_generated_files(response_text: str, target_dir: Path):
     matches = re.findall(r"--- START OUTPUT: (.*?) ---\n(.*?)--- END OUTPUT: \1 ---", response_text, re.DOTALL)
     if not matches:
         print("\n--- NO FILES DETECTED ---")
         return
 
     print(f"\n  Found {len(matches)} file(s). Saving to '{target_dir}'...")
-    safe_dir = os.path.abspath(target_dir)
+    safe_dir = target_dir.resolve()
 
     for filename, content in matches:
         filename = filename.strip()
         content = content.strip()
-        full_path = os.path.abspath(os.path.join(safe_dir, filename))
-        if not full_path.startswith(safe_dir): continue
+        full_path = (safe_dir / filename).resolve()
+        if not str(full_path).startswith(str(safe_dir)): continue
 
-        os.makedirs(os.path.dirname(full_path), exist_ok=True)
+        full_path.parent.mkdir(parents=True, exist_ok=True)
         
         try:
             # Check if file exists and compare content
-            if os.path.exists(full_path):
-                with open(full_path, 'r', encoding='utf-8') as f:
+            if full_path.exists():
+                with full_path.open('r', encoding='utf-8') as f:
                     existing_content = f.read()
                 
                 if existing_content == content:
@@ -347,19 +375,20 @@ def save_generated_files(response_text: str, target_dir: str):
                     continue
                 else:
                     # Different content, find a new name with suffix
-                    base, ext = os.path.splitext(filename)
+                    base = full_path.stem
+                    ext = full_path.suffix
                     counter = 1
                     while True:
                         new_filename = f"{base}.{counter}{ext}"
-                        new_full_path = os.path.abspath(os.path.join(safe_dir, new_filename))
+                        new_full_path = (safe_dir / new_filename).resolve()
                         
-                        if not os.path.exists(new_full_path):
+                        if not new_full_path.exists():
                             full_path = new_full_path
                             filename = new_filename
                             break
                         
                         # Check if this numbered file also has the same content
-                        with open(new_full_path, 'r', encoding='utf-8') as f:
+                        with new_full_path.open('r', encoding='utf-8') as f:
                             if f.read() == content:
                                 print(f"    Skipped: {filename} (duplicate of {new_filename})")
                                 break
@@ -370,7 +399,7 @@ def save_generated_files(response_text: str, target_dir: str):
                         continue
             
             # Save the file
-            with open(full_path, 'w', encoding='utf-8') as f:
+            with full_path.open('w', encoding='utf-8') as f:
                 f.write(content)
             print(f"    Saved: {filename}")
         except Exception as e:
@@ -379,67 +408,80 @@ def save_generated_files(response_text: str, target_dir: str):
 # --- 4. MAIN EXECUTION ---
 
 def main():
-    load_dotenv()
-    api_key = os.getenv("GOOGLE_API_KEY")
-    if not api_key: exit(1)
-    genai.configure(api_key=api_key)
-
-    config = AppConfig.load("config.yaml")
-
-    for p in [config.project.zip_path, config.project.prompt_file, config.project.system_prompt_file]:
-        if not os.path.exists(p):
-            print_error(f"Error: {p} not found"); exit(1)
-
-    if config.model.validate_model:
-        check_model_availability(config.model.name)
-
-    # Setup Directories
-    zip_name = os.path.splitext(os.path.basename(config.project.zip_path))[0]
-    timestamp = time.strftime("%Y%m%d-%H%M")
-    run_dir = os.path.join(config.project.output_dir, f"{zip_name}-{timestamp}")
-    report_path = os.path.join(run_dir, os.path.basename(config.project.report_file))
-    context_path = os.path.join(run_dir, "context.txt")
-
-    os.makedirs(run_dir, exist_ok=True)
-    print_info(f"Output directory created: {run_dir}")
-
-    with open(config.project.system_prompt_file, 'r') as f: sys_prompt = f.read()
-    with open(config.project.prompt_file, 'r') as f: user_prompt = f.read()
-
-    # Create context file directly (no temp file)
-    with Halo(text=f'Processing ZIP...', spinner='dots'):
-        extract_and_report(config.project.zip_path, context_path, report_path, config.processing)
-    
-    print_info(f"Context saved: {context_path}")
-
-    gemini_file, is_cached = get_or_upload_file(context_path)
-    if is_cached: print_info(f"Using cloud-cached context: {gemini_file.display_name}")
-
-    spinner = Halo(text=f'Generating with {config.model.name}...', spinner='dots')
-    spinner.start()
-    start_time = time.time()
     try:
-        model = genai.GenerativeModel(config.model.name)
-        response = model.generate_content(
-            [gemini_file, f"{sys_prompt}\n\nUSER REQUEST:\n{user_prompt}"],
-            request_options={"timeout": config.model.timeout}
-        )
-        end_time = time.time()
-        spinner.succeed("Generation complete!")
-    except Exception as e:
-        spinner.fail(f"Generation failed: {e}")
+        load_dotenv()
+        api_key = os.getenv("GOOGLE_API_KEY")
+        if not api_key:
+            print_error("GOOGLE_API_KEY not found in environment variables.")
+            exit(1)
+        genai.configure(api_key=api_key)
+
+        config = AppConfig.load("config.yaml")
+
+        for p in [config.project.zip_path, config.project.prompt_file, config.project.system_prompt_file]:
+            if not p.exists():
+                print_error(f"Error: {p} not found")
+                exit(1)
+
+        if config.model.validate_model:
+            check_model_availability(config.model.name)
+
+        # Setup Directories
+        zip_name = config.project.zip_path.stem
+        timestamp = time.strftime("%Y%m%d-%H%M")
+        run_dir = config.project.output_dir / f"{zip_name}-{timestamp}"
+        report_path = run_dir / config.project.report_file
+        context_path = run_dir / "context.txt"
+
+        run_dir.mkdir(parents=True, exist_ok=True)
+        print_info(f"Output directory created: {run_dir}")
+
+        with config.project.system_prompt_file.open('r', encoding='utf-8') as f:
+            sys_prompt = f.read()
+        with config.project.prompt_file.open('r', encoding='utf-8') as f:
+            user_prompt = f.read()
+
+        # Create context file directly (no temp file)
+        with Halo(text=f'Processing ZIP...', spinner='dots'):
+            extract_and_report(config.project.zip_path, context_path, report_path, config.processing)
+        
+        print_info(f"Context saved: {context_path}")
+
+        gemini_file, is_cached = get_or_upload_file(context_path)
+        if is_cached: print_info(f"Using cloud-cached context: {gemini_file.display_name}")
+
+        spinner = Halo(text=f'Generating with {config.model.name}...', spinner='dots')
+        spinner.start()
+        start_time = time.time()
+        try:
+            model = genai.GenerativeModel(config.model.name)
+            response = model.generate_content(
+                [gemini_file, f"{sys_prompt}\n\nUSER REQUEST:\n{user_prompt}"],
+                request_options={"timeout": config.model.timeout}
+            )
+            end_time = time.time()
+            spinner.succeed("Generation complete!")
+        except Exception as e:
+            spinner.fail(f"Generation failed: {e}")
+            raise e
+
+        duration = end_time - start_time
+        append_inference_stats(report_path, response, duration, config.model.name)
+        print_info(f"Report updated: {report_path}")
+
+        # Check if response has valid content before accessing .text
+        if response.candidates and response.candidates[0].finish_reason.name != "STOP":
+            reason = response.candidates[0].finish_reason.name
+            print_warning(f"Response finished with reason: {reason}")
+        else:
+            save_generated_files(response.text, run_dir)
+
+    except RepoAnalyzerError as e:
+        print_error(f"Error: {e}")
         exit(1)
-
-    duration = end_time - start_time
-    append_inference_stats(report_path, response, duration, config.model.name)
-    print_info(f"Report updated: {report_path}")
-
-    # Check if response has valid content before accessing .text
-    if response.candidates and response.candidates[0].finish_reason.name != "STOP":
-        reason = response.candidates[0].finish_reason.name
-        print_warning(f"Response finished with reason: {reason}")
-    else:
-        save_generated_files(response.text, run_dir)
+    except Exception as e:
+        print_error(f"Unexpected Error: {e}")
+        exit(1)
 
 if __name__ == "__main__":
     main()
