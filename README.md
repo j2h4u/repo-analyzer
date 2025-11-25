@@ -70,7 +70,7 @@ After each run, a timestamped directory is created in `output/` containing:
 
 ## Development
 > [!NOTE]
-> Before contributing or refactoring, please read [BUSINESS_CONTEXT.md](BUSINESS_CONTEXT.md) to understand the architectural vision and constraints.
+> Before contributing or refactoring, please read [BUSINESS_CONTEXT.md](doc/BUSINESS_CONTEXT.md) to understand the architectural vision and constraints.
 
 ## License
 
