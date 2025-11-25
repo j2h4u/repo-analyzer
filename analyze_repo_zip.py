@@ -12,6 +12,10 @@ from dotenv import load_dotenv
 from halo import Halo
 from dataclasses import dataclass
 from typing import Any
+import logging
+
+# Logger will be configured in main() after loading config
+logger = logging.getLogger(__name__)
 
 # --- CONSTANTS ---
 COLLAPSE_THRESHOLD = 50
@@ -53,10 +57,15 @@ class ProcessingConfig:
     ignore_dirs: list[str]
 
 @dataclass
+class LoggingConfig:
+    level: str = "INFO"
+
+@dataclass
 class AppConfig:
     project: ProjectConfig
     model: ModelConfig
     processing: ProcessingConfig
+    logging: LoggingConfig
 
     @classmethod
     def load(cls, config_path: Path | str) -> 'AppConfig':
@@ -79,7 +88,8 @@ class AppConfig:
                 report_file=data['project']['report_file']
             ),
             model=ModelConfig(**data['model']),
-            processing=ProcessingConfig(**data['processing'])
+            processing=ProcessingConfig(**data['processing']),
+            logging=LoggingConfig(**data.get('logging', {'level': 'INFO'}))
         )
 
 # --- 2. HELPERS FOR REPORTING ---
@@ -375,65 +385,91 @@ def parse_generated_files(response_text: str) -> list[GeneratedFile]:
         for filename, content in matches
     ]
 
-def resolve_duplicate_filename(
-    target_path: Path,
-    content: str,
-    original_filename: str,
-    base_dir: Path
-) -> tuple[Path | None, str]:
+def resolve_file_conflicts(files: list[GeneratedFile]) -> list[GeneratedFile]:
     """
-    Resolves filename conflicts by finding a unique numbered name or detecting duplicates.
+    Resolves filename conflicts in-memory.
+    
+    - Removes exact duplicates (same filename + content)
+    - Renames files with same name but different content (file.1.md, file.2.md)
+    - Preserves directory structure
     
     Args:
-        target_path: The desired path for the file.
-        content: Content of the file to save.
-        original_filename: Original filename from the GeneratedFile (for display).
-        base_dir: Base directory for security checks.
+        files: List of GeneratedFile objects from parsing.
         
     Returns:
-        (final_path, display_name) if file should be saved.
-        (None, None) if file is a duplicate and should be skipped.
+        List of unique GeneratedFile objects ready to save.
     """
-    # File doesn't exist, use original path
-    if not target_path.exists():
-        return target_path, original_filename
+    # Track: filename -> list of (content, index in result)
+    seen: dict[str, list[tuple[str, int]]] = {}
+    result: list[GeneratedFile] = []
     
-    # File exists, check content
-    with target_path.open('r', encoding='utf-8') as f:
-        existing_content = f.read()
+    # Statistics
+    renamed_count = 0
+    skipped_count = 0
     
-    if existing_content == content:
-        # Same content, skip
-        print(f"    Skipped: {original_filename} (duplicate)")
-        return None, None
-    
-    # Different content, find a new numbered name
-    relative_path = Path(original_filename)
-    parent_dir = relative_path.parent
-    base = target_path.stem
-    ext = target_path.suffix
-    counter = 1
-    
-    while True:
-        # Create new filename preserving directory structure
-        new_name = f"{base}.{counter}{ext}"
-        new_relative_path = parent_dir / new_name
-        new_full_path = (base_dir / new_relative_path).resolve()
+    for file in files:
+        filename = file.filename
+        content = file.content
         
-        if not new_full_path.exists():
-            return new_full_path, str(new_relative_path)
-        
-        # Check if this numbered file also has the same content
-        with new_full_path.open('r', encoding='utf-8') as f:
-            if f.read() == content:
-                print(f"    Skipped: {original_filename} (duplicate of {new_relative_path})")
-                return None, None
-        
-        counter += 1
+        if filename not in seen:
+            # First occurrence of this filename
+            seen[filename] = [(content, len(result))]
+            result.append(file)
+            logger.debug(f"Added file: {filename}")
+        else:
+            # Filename already seen, check content
+            found_duplicate = False
+            
+            for seen_content, _ in seen[filename]:
+                if seen_content == content:
+                    # Exact duplicate (same name + content), skip
+                    logger.info(f"Skipped exact duplicate: {filename}")
+                    skipped_count += 1
+                    found_duplicate = True
+                    break
+            
+            if not found_duplicate:
+                # Same name, different content - need to rename
+                relative_path = Path(filename)
+                parent_dir = relative_path.parent
+                base = relative_path.stem
+                ext = relative_path.suffix
+                
+                # Find next available number
+                counter = 1
+                while True:
+                    new_name = f"{base}.{counter}{ext}"
+                    new_filename = str(parent_dir / new_name) if parent_dir != Path('.') else new_name
+                    
+                    # Check if this numbered name already exists in our seen list
+                    if new_filename not in seen:
+                        seen[new_filename] = [(content, len(result))]
+                        result.append(GeneratedFile(filename=new_filename, content=content))
+                        logger.info(f"Renamed conflicting file: {filename} -> {new_filename}")
+                        renamed_count += 1
+                        break
+                    else:
+                        # Check if numbered file has same content
+                        is_dup = any(sc == content for sc, _ in seen[new_filename])
+                        if is_dup:
+                            logger.info(f"Skipped duplicate: {filename} (same as {new_filename})")
+                            skipped_count += 1
+                            found_duplicate = True
+                            break
+                    
+                    counter += 1
+    
+    logger.info(
+        f"Processed {len(files)} files → {len(result)} unique "
+        f"({renamed_count} renamed, {skipped_count} duplicates skipped)"
+    )
+    return result
 
 def save_files_to_disk(files: list[GeneratedFile], target_dir: Path) -> None:
     """
     Saves a list of GeneratedFile objects to disk.
+    
+    Assumes files have already been deduplicated and conflict-resolved.
     
     Args:
         files: List of GeneratedFile objects to save.
@@ -456,19 +492,9 @@ def save_files_to_disk(files: list[GeneratedFile], target_dir: Path) -> None:
         full_path.parent.mkdir(parents=True, exist_ok=True)
         
         try:
-            # Resolve duplicate filenames
-            final_path, display_name = resolve_duplicate_filename(
-                full_path, file.content, file.filename, safe_dir
-            )
-            
-            # Skip if file is a duplicate
-            if final_path is None:
-                continue
-            
-            # Save the file
-            with final_path.open('w', encoding='utf-8') as f:
+            with full_path.open('w', encoding='utf-8') as f:
                 f.write(file.content)
-            print(f"    Saved: {display_name}")
+            print(f"    Saved: {file.filename}")
         except Exception as e:
             print_error(f"Error: {e}", indent=4)
 
@@ -484,6 +510,14 @@ def main() -> None:
         genai.configure(api_key=api_key)
 
         config = AppConfig.load("config.yaml")
+        
+        # Configure logging based on config
+        log_level = getattr(logging, config.logging.level.upper(), logging.INFO)
+        logging.basicConfig(
+            level=log_level,
+            format='%(levelname)s [%(funcName)s]: %(message)s',
+            force=True  # Override any existing config
+        )
 
         for p in [config.project.zip_path, config.project.prompt_file, config.project.system_prompt_file]:
             if not p.exists():
@@ -529,7 +563,9 @@ def main() -> None:
             end_time = time.time()
             spinner.succeed("Generation complete!")
         except Exception as e:
-            spinner.fail(f"Generation failed: {e}")
+            end_time = time.time()
+            elapsed = end_time - start_time
+            spinner.fail(f"Generation failed after {format_duration(elapsed)}: {e}")
             raise e
 
         duration = end_time - start_time
@@ -548,7 +584,8 @@ def main() -> None:
             print_warning(f"Response finished with reason: {reason}")
         else:
             files = parse_generated_files(response.text)
-            save_files_to_disk(files, run_dir)
+            unique_files = resolve_file_conflicts(files)
+            save_files_to_disk(unique_files, run_dir)
 
     except RepoAnalyzerError as e:
         print_error(f"Error: {e}")

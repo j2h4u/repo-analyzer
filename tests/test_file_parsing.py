@@ -8,7 +8,7 @@ import os
 # Add parent directory to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from analyze_repo_zip import parse_generated_files, save_files_to_disk, GeneratedFile
+from analyze_repo_zip import parse_generated_files, save_files_to_disk, GeneratedFile, resolve_file_conflicts
 
 
 class TestFileParsing(unittest.TestCase):
@@ -117,20 +117,22 @@ model:
         self.assertEqual(len(saved_files), 0)
 
     def test_duplicate_file_in_subdirectory(self):
-        """Test that duplicate files in subdirectories preserve the directory structure."""
+        """Test that duplicate files in subdirectories are resolved correctly."""
         files = [
             GeneratedFile(filename="20-modules/school-README.md", content="Version 1"),
             GeneratedFile(filename="20-modules/school-README.md", content="Version 2"),
         ]
         
-        save_files_to_disk(files, self.test_path)
+        # Resolve conflicts in-memory first
+        unique_files = resolve_file_conflicts(files)
+        save_files_to_disk(unique_files, self.test_path)
         
         file1 = self.test_path / "20-modules" / "school-README.md"
         file2 = self.test_path / "20-modules" / "school-README.1.md"
         
         # Both files should exist in the subdirectory
         self.assertTrue(file1.exists(), "Original file should exist")
-        self.assertTrue(file2.exists(), "Duplicate file should exist in same directory")
+        self.assertTrue(file2.exists(), "Numbered file should exist in same directory")
         
         # Check content
         self.assertEqual(file1.read_text(), "Version 1")
@@ -139,6 +141,37 @@ model:
         # Make sure numbered file is NOT in root directory
         wrong_location = self.test_path / "school-README.1.md"
         self.assertFalse(wrong_location.exists(), "Numbered file should not be in root directory")
+
+    def test_resolve_exact_duplicates(self):
+        """Test that resolve_file_conflicts removes exact duplicates."""
+        files = [
+            GeneratedFile(filename="README.md", content="Same content"),
+            GeneratedFile(filename="README.md", content="Same content"),
+            GeneratedFile(filename="other.md", content="Different"),
+        ]
+        
+        unique_files = resolve_file_conflicts(files)
+        
+        # Should have 2 files (one duplicate removed)
+        self.assertEqual(len(unique_files), 2)
+        self.assertEqual(unique_files[0].filename, "README.md")
+        self.assertEqual(unique_files[1].filename, "other.md")
+
+    def test_resolve_same_name_different_content(self):
+        """Test that resolve_file_conflicts renames files with same name but different content."""
+        files = [
+            GeneratedFile(filename="config.yaml", content="version 1"),
+            GeneratedFile(filename="config.yaml", content="version 2"),
+            GeneratedFile(filename="config.yaml", content="version 3"),
+        ]
+        
+        unique_files = resolve_file_conflicts(files)
+        
+        # Should have 3 files with numbered names
+        self.assertEqual(len(unique_files), 3)
+        self.assertEqual(unique_files[0].filename, "config.yaml")
+        self.assertEqual(unique_files[1].filename, "config.1.yaml")
+        self.assertEqual(unique_files[2].filename, "config.2.yaml")
 
 
 if __name__ == '__main__':

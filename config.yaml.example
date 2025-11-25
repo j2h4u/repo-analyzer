@@ -22,6 +22,12 @@ model:
   # Validate model name before processing (set to true only when changing models)
   validate_model: false
 
+logging:
+  # Logging level: DEBUG, INFO, WARNING, ERROR
+  # INFO shows conflict resolution, warnings and errors
+  # DEBUG additionally shows every file added
+  level: "INFO"
+
 processing:
   # List of file extensions to include in the context
   valid_extensions:
