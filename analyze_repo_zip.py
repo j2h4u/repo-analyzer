@@ -1,4 +1,9 @@
 #!/usr/bin/env python3
+"""Repository analyzer tool that processes zip archives and generates documentation using Gemini AI.
+
+This script extracts and analyzes code from a zip archive, uploads it to Google's Gemini API,
+and generates comprehensive documentation based on configurable prompts.
+"""
 
 import hashlib
 import logging
@@ -86,6 +91,7 @@ class AppConfig:
 
     @classmethod
     def load(cls, config_path: Path | str) -> 'AppConfig':
+        """Load application configuration from a YAML file."""
         path = Path(config_path)
         if not path.exists():
             raise ConfigError(f"Configuration file '{path}' not found.")
@@ -201,6 +207,7 @@ def build_file_tree(all_files: list[str], included_files: set[str]) -> str:
 # --- 3. CORE LOGIC ---
 
 def check_model_availability(model_name: str):
+    """Check if the specified Gemini model is available via the API."""
     spinner = Halo(text=f'Verifying model access: {model_name}...', spinner='dots')
     spinner.start()
     try:
@@ -218,7 +225,10 @@ def check_model_availability(model_name: str):
         spinner.fail(f"API Connection Error: {e}")
         raise ConnectionError(f"API Connection Error: {e}")
 
-def scan_zip(zip_path: Path, cfg: ProcessingConfig) -> tuple[list[str], list[str], set[str], list[str], dict[str, list[str]]]:
+def scan_zip(
+    zip_path: Path,
+    cfg: ProcessingConfig
+) -> tuple[list[str], list[str], set[str], list[str], dict[str, list[str]]]:
     """Scans zip file and returns file lists and stats."""
     valid_exts = tuple(cfg.valid_extensions)
     include_names = set(n.lower() for n in cfg.include_filenames)
@@ -270,7 +280,12 @@ def scan_zip(zip_path: Path, cfg: ProcessingConfig) -> tuple[list[str], list[str
 
     return all_files, included_files, encountered_ignore_dirs, skipped_no_ext, skipped_by_ext
 
-def write_context(output_path: Path, zip_path: Path, all_files: list[str], included_files: list[str]) -> None:
+def write_context(
+    output_path: Path,
+    zip_path: Path,
+    all_files: list[str],
+    included_files: list[str]
+) -> None:
     """Writes the context file with tree and file contents."""
     with output_path.open('w', encoding='utf-8') as out_f:
         out_f.write("=== PROJECT FILE TREE ===\n\n")
@@ -286,14 +301,20 @@ def write_context(output_path: Path, zip_path: Path, all_files: list[str], inclu
                 content = z.read(filename).decode('utf-8')
                 out_f.write(f"--- START FILE: {filename} ---\n{content}\n--- END FILE: {filename} ---\n\n")
 
-def write_report(report_path: Path, zip_name: str, ignore_dirs: set[str], skipped_no_ext: list[str], skipped_by_ext: dict[str, list[str]]) -> None:
+def write_report(
+    report_path: Path,
+    zip_name: str,
+    ignore_dirs: set[str],
+    skipped_no_ext: list[str],
+    skipped_by_ext: dict[str, list[str]]
+) -> None:
     """Writes the execution report."""
     with report_path.open('w', encoding='utf-8') as rep:
-        rep.write(f"--- EXECUTION REPORT ---\n")
+        rep.write("--- EXECUTION REPORT ---\n")
         rep.write(f"Date: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
         rep.write(f"Source: {zip_name}\n\n")
 
-        rep.write(f"--- SKIPPED FILES (Noise Reduction) ---\n")
+        rep.write("--- SKIPPED FILES (Noise Reduction) ---\n")
 
         if ignore_dirs:
             sorted_dirs = sorted([f"{d}/" for d in ignore_dirs])
@@ -316,13 +337,22 @@ def write_report(report_path: Path, zip_name: str, ignore_dirs: set[str], skippe
                     rep.write(f"    * {f}\n")
         rep.write("\n")
 
-def extract_and_report(zip_path: Path, output_path: Path, report_path: Path, cfg: ProcessingConfig) -> None:
+def extract_and_report(
+    zip_path: Path,
+    output_path: Path,
+    report_path: Path,
+    cfg: ProcessingConfig
+) -> None:
     all_files, included_files, ignore_dirs, skipped_no, skipped_ext = scan_zip(zip_path, cfg)
 
     write_context(output_path, zip_path, all_files, included_files)
     write_report(report_path, zip_path.name, ignore_dirs, skipped_no, skipped_ext)
 
-def extract_inference_stats(response: Any, duration_sec: float, model_name: str) -> InferenceStats:
+def extract_inference_stats(
+    response: Any,
+    duration_sec: float,
+    model_name: str
+) -> InferenceStats:
     """Extracts statistics from the model response."""
     input_tokens = 0
     output_tokens = 0
@@ -359,7 +389,7 @@ def append_inference_stats(report_path: Path, stats: InferenceStats) -> None:
     Appends clean, human-readable stats to the report.
     """
     with report_path.open('a', encoding='utf-8') as rep:
-        rep.write(f"--- INFERENCE STATS ---\n")
+        rep.write("--- INFERENCE STATS ---\n")
         rep.write(f"Model: {stats.model_name}\n")
         rep.write(f"Duration: {format_duration(stats.duration_seconds)}\n")
 
@@ -380,6 +410,7 @@ def append_inference_stats(report_path: Path, stats: InferenceStats) -> None:
             rep.write(f"Finish Reason: {stats.finish_reason}\n")
 
 def get_or_upload_file(local_path: Path) -> tuple[Any, bool]:
+    """Get file from Gemini cache or upload if not present."""
     def get_hash(fp):
         h = hashlib.md5()
         with open(fp, "rb") as f:
@@ -623,7 +654,12 @@ def prepare_context(config: AppConfig, run_dir: Path) -> tuple[Path, Path]:
     print_info(f"Context saved: {context_path}")
     return context_path, report_path
 
-def run_inference(model_config: ModelConfig, gemini_file: Any, sys_prompt: str, user_prompt: str) -> tuple[Any, float]:
+def run_inference(
+    model_config: ModelConfig,
+    gemini_file: Any,
+    sys_prompt: str,
+    user_prompt: str
+) -> tuple[Any, float]:
     """Run model inference and return response with duration."""
     spinner = Halo(text=f'Generating with {model_config.name}...', spinner='dots')
     spinner.start()
@@ -651,7 +687,12 @@ def run_inference(model_config: ModelConfig, gemini_file: Any, sys_prompt: str, 
         spinner.fail(f"Generation failed after {format_duration(elapsed)}: {e}")
         raise e
 
-def process_response(response: Any, run_dir: Path, report_path: Path, stats: InferenceStats) -> None:
+def process_response(
+    response: Any,
+    run_dir: Path,
+    report_path: Path,
+    stats: InferenceStats
+) -> None:
     """Process model response: log stats, save response, and extract files."""
     # Process stats
     log_inference_stats(stats)
@@ -674,6 +715,7 @@ def process_response(response: Any, run_dir: Path, report_path: Path, stats: Inf
         save_files_to_disk(unique_files, run_dir)
 
 def main() -> None:
+    """Main entry point for the repository analyzer."""
     try:
         config, run_dir = initialize_app()
         setup_logging(run_dir, config.logging.level)
