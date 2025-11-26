@@ -100,7 +100,7 @@ class AppConfig:
             with path.open('r', encoding='utf-8') as f:
                 data = yaml.safe_load(f)
         except yaml.YAMLError as e:
-            raise ConfigError(f"Error parsing YAML: {e}")
+            raise ConfigError(f"Error parsing YAML: {e}") from e
 
         return cls(
             project=ProjectConfig(
@@ -223,7 +223,7 @@ def check_model_availability(model_name: str):
             raise ValueError(f"Model '{model_name}' not found.")
     except Exception as e:
         spinner.fail(f"API Connection Error: {e}")
-        raise ConnectionError(f"API Connection Error: {e}")
+        raise ConnectionError(f"API Connection Error: {e}") from e
 
 def scan_zip(
     zip_path: Path,
@@ -299,7 +299,10 @@ def write_context(
         with zipfile.ZipFile(zip_path, 'r') as z:
             for filename in included_files:
                 content = z.read(filename).decode('utf-8')
-                out_f.write(f"--- START FILE: {filename} ---\n{content}\n--- END FILE: {filename} ---\n\n")
+                out_f.write(
+                    f"--- START FILE: {filename} ---\n{content}\n"
+                    f"--- END FILE: {filename} ---\n\n"
+                )
 
 def write_report(
     report_path: Path,
@@ -343,6 +346,10 @@ def extract_and_report(
     report_path: Path,
     cfg: ProcessingConfig
 ) -> None:
+    """Extract context and generate report from zip archive.
+    
+    Combines scan_zip, write_context, and write_report to process a zip archive.
+    """
     all_files, included_files, ignore_dirs, skipped_no, skipped_ext = scan_zip(zip_path, cfg)
 
     write_context(output_path, zip_path, all_files, included_files)
@@ -396,9 +403,18 @@ def append_inference_stats(report_path: Path, stats: InferenceStats) -> None:
         # 1. Token Usage
         # Visual alignment using fixed width (:>6)
         rep.write("Token Usage:\n")
-        rep.write(f"  - Input (context):  {format_token_count(stats.input_tokens):>6} ({stats.input_tokens})\n")
-        rep.write(f"  - Output (gen):     {format_token_count(stats.output_tokens):>6} ({stats.output_tokens})\n")
-        rep.write(f"  - Total:            {format_token_count(stats.total_tokens):>6} ({stats.total_tokens})\n")
+        rep.write(
+            f"  - Input (context):  {format_token_count(stats.input_tokens):>6} "
+            f"({stats.input_tokens})\n"
+        )
+        rep.write(
+            f"  - Output (gen):     {format_token_count(stats.output_tokens):>6} "
+            f"({stats.output_tokens})\n"
+        )
+        rep.write(
+            f"  - Total:            {format_token_count(stats.total_tokens):>6} "
+            f"({stats.total_tokens})\n"
+        )
 
         if stats.duration_seconds > 0:
             rep.write(f"Token Speed: {int(stats.token_speed)} tokens/sec (output)\n")
@@ -414,7 +430,8 @@ def get_or_upload_file(local_path: Path) -> tuple[Any, bool]:
     def get_hash(fp):
         h = hashlib.md5()
         with open(fp, "rb") as f:
-            for chunk in iter(lambda: f.read(4096), b""): h.update(chunk)
+            for chunk in iter(lambda: f.read(4096), b""):
+                h.update(chunk)
         return h.hexdigest()
 
     file_hash = get_hash(local_path)
@@ -428,11 +445,16 @@ def get_or_upload_file(local_path: Path) -> tuple[Any, bool]:
     spinner = Halo(text='Uploading to Gemini...', spinner='dots')
     spinner.start()
     try:
-        uploaded = genai.upload_file(path=local_path, mime_type="text/plain", display_name=target_display_name)
+        uploaded = genai.upload_file(
+            path=local_path,
+            mime_type="text/plain",
+            display_name=target_display_name
+        )
         while uploaded.state.name == "PROCESSING":
             time.sleep(2)
             uploaded = genai.get_file(uploaded.name)
-        if uploaded.state.name == "FAILED": raise ValueError("Upload failed")
+        if uploaded.state.name == "FAILED":
+            raise ValueError("Upload failed")
         spinner.succeed("Upload complete.")
         return uploaded, False
     except Exception as e:
@@ -493,7 +515,7 @@ def resolve_file_conflicts(files: list[GeneratedFile]) -> list[GeneratedFile]:
             # First occurrence of this filename
             seen[filename] = [(content, len(result))]
             result.append(file)
-            logger.debug(f"Added file: {filename}")
+            logger.debug("Added file: %s", filename)
         else:
             # Filename already seen, check content
             found_duplicate = False
@@ -501,7 +523,7 @@ def resolve_file_conflicts(files: list[GeneratedFile]) -> list[GeneratedFile]:
             for seen_content, _ in seen[filename]:
                 if seen_content == content:
                     # Exact duplicate (same name + content), skip
-                    logger.info(f"Skipped exact duplicate: {filename}")
+                    logger.info("Skipped exact duplicate: %s", filename)
                     skipped_count += 1
                     found_duplicate = True
                     break
@@ -517,20 +539,32 @@ def resolve_file_conflicts(files: list[GeneratedFile]) -> list[GeneratedFile]:
                 counter = 1
                 while True:
                     new_name = f"{base}.{counter}{ext}"
-                    new_filename = str(parent_dir / new_name) if parent_dir != Path('.') else new_name
+                    new_filename = (
+                        str(parent_dir / new_name)
+                        if parent_dir != Path('.')
+                        else new_name
+                    )
 
                     # Check if this numbered name already exists in our seen list
                     if new_filename not in seen:
                         seen[new_filename] = [(content, len(result))]
                         result.append(GeneratedFile(filename=new_filename, content=content))
-                        logger.info(f"Renamed conflicting file: {filename} -> {new_filename}")
+                        logger.info(
+                            "Renamed conflicting file: %s -> %s",
+                            filename,
+                            new_filename
+                        )
                         renamed_count += 1
                         break
                     else:
                         # Check if numbered file has same content
                         is_dup = any(sc == content for sc, _ in seen[new_filename])
                         if is_dup:
-                            logger.info(f"Skipped duplicate: {filename} (same as {new_filename})")
+                            logger.info(
+                                "Skipped duplicate: %s (same as %s)",
+                                filename,
+                                new_filename
+                            )
                             skipped_count += 1
                             found_duplicate = True
                             break
@@ -538,8 +572,11 @@ def resolve_file_conflicts(files: list[GeneratedFile]) -> list[GeneratedFile]:
                     counter += 1
 
     logger.info(
-        f"Processed {len(files)} files → {len(result)} unique "
-        f"({renamed_count} renamed, {skipped_count} duplicates skipped)"
+        "Processed %d files → %d unique (%d renamed, %d duplicates skipped)",
+        len(files),
+        len(result),
+        renamed_count,
+        skipped_count
     )
     return result
 
@@ -557,7 +594,7 @@ def save_files_to_disk(files: list[GeneratedFile], target_dir: Path) -> None:
         logger.warning("No files to save")
         return
 
-    logger.info(f"Saving {len(files)} files to '{target_dir}'")
+    logger.info("Saving %d files to '%s'", len(files), target_dir)
     safe_dir = target_dir.resolve()
 
     saved_count = 0
@@ -568,7 +605,9 @@ def save_files_to_disk(files: list[GeneratedFile], target_dir: Path) -> None:
 
         # Security check: prevent path traversal
         if not str(full_path).startswith(str(safe_dir)):
-            logger.warning(f"Path traversal attempt blocked: {file.filename}")
+            logger.warning(
+                "Path traversal attempt blocked: %s", file.filename
+            )
             continue
 
         full_path.parent.mkdir(parents=True, exist_ok=True)
@@ -576,16 +615,18 @@ def save_files_to_disk(files: list[GeneratedFile], target_dir: Path) -> None:
         try:
             with full_path.open('w', encoding='utf-8') as f:
                 f.write(file.content)
-            logger.debug(f"Saved: {file.filename}")
+            logger.debug("Saved: %s", file.filename)
             saved_count += 1
         except Exception as e:
-            logger.error(f"Failed to save {file.filename}: {e}")
+            logger.error("Failed to save %s: %s", file.filename, e)
             error_count += 1
 
     if error_count > 0:
-        logger.warning(f"Saved {saved_count}/{len(files)} files ({error_count} errors)")
+        logger.warning(
+            "Saved %d/%d files (%d errors)", saved_count, len(files), error_count
+        )
     else:
-        logger.info(f"Successfully saved all {saved_count} files")
+        logger.info("Successfully saved all %d files", saved_count)
 
 # --- 4. MAIN EXECUTION ---
 
@@ -595,7 +636,10 @@ def setup_logging(run_dir: Path, config_log_level: str) -> None:
 
     # Create formatters
     file_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(funcName)s - %(message)s')
-    console_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(funcName)s - %(message)s', datefmt='%H:%M:%S')
+    console_formatter = logging.Formatter(
+        '%(asctime)s - %(levelname)s - %(funcName)s - %(message)s',
+        datefmt='%H:%M:%S'
+    )
 
     # Create handlers
     file_handler = logging.FileHandler(run_dir / DEBUG_LOG_FILENAME, encoding='utf-8')
@@ -634,7 +678,11 @@ def initialize_app() -> tuple[AppConfig, Path]:
 
 def validate_files(config: AppConfig) -> None:
     """Validate that required files exist and optionally check model availability."""
-    for p in [config.project.zip_path, config.project.prompt_file, config.project.system_prompt_file]:
+    for p in [
+        config.project.zip_path,
+        config.project.prompt_file,
+        config.project.system_prompt_file
+    ]:
         if not p.exists():
             print_error(f"Error: {p} not found")
             exit(1)
@@ -678,8 +726,11 @@ def run_inference(
         end_time = time.time()
         elapsed = end_time - start_time
         spinner.fail(f"Generation timed out after {format_duration(elapsed)}")
-        logger.debug(f"API Timeout details: {e}")
-        print_error("The model took too long to respond (Timeout). Try increasing the timeout in config.yaml.")
+        logger.debug("API Timeout details: %s", e)
+        print_error(
+            "The model took too long to respond (Timeout). "
+            "Try increasing the timeout in config.yaml."
+        )
         exit(1)
     except Exception as e:
         end_time = time.time()
@@ -746,4 +797,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
