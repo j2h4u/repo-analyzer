@@ -556,18 +556,18 @@ def resolve_file_conflicts(files: list[GeneratedFile]) -> list[GeneratedFile]:
                         )
                         renamed_count += 1
                         break
-                    else:
-                        # Check if numbered file has same content
-                        is_dup = any(sc == content for sc, _ in seen[new_filename])
-                        if is_dup:
-                            logger.info(
-                                "Skipped duplicate: %s (same as %s)",
-                                filename,
-                                new_filename
-                            )
-                            skipped_count += 1
-                            found_duplicate = True
-                            break
+
+                    # Check if numbered file has same content
+                    is_dup = any(sc == content for sc, _ in seen[new_filename])
+                    if is_dup:
+                        logger.info(
+                            "Skipped duplicate: %s (same as %s)",
+                            filename,
+                            new_filename
+                        )
+                        skipped_count += 1
+                        found_duplicate = True
+                        break
 
                     counter += 1
 
