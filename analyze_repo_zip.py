@@ -30,16 +30,15 @@ DEBUG_LOG_FILENAME = "debug.log"
 # --- CUSTOM EXCEPTIONS ---
 class RepoAnalyzerError(Exception):
     """Base exception for repo analyzer errors."""
-    pass
 
 class ConfigError(RepoAnalyzerError):
     """Configuration loading error."""
-    pass
 
 # --- 1. CONFIGURATION STRUCTS ---
 
 @dataclass
 class ProjectConfig:
+    """Configuration for project-specific paths."""
     zip_path: Path
     prompt_file: Path
     system_prompt_file: Path
@@ -48,18 +47,21 @@ class ProjectConfig:
 
 @dataclass
 class ModelConfig:
+    """Configuration for AI model settings."""
     name: str
     timeout: int
     validate_model: bool
 
 @dataclass
 class ProcessingConfig:
+    """Configuration for file processing and filtering."""
     valid_extensions: list[str]
     include_filenames: list[str]
     ignore_dirs: list[str]
 
 @dataclass
 class InferenceStats:
+    """Statistics collected during model inference."""
     model_name: str
     duration_seconds: float
     input_tokens: int
@@ -70,10 +72,12 @@ class InferenceStats:
 
 @dataclass
 class LoggingConfig:
+    """Configuration for logging behavior."""
     level: str = "INFO"
 
 @dataclass
 class AppConfig:
+    """Main application configuration container."""
     project: ProjectConfig
     model: ModelConfig
     processing: ProcessingConfig
