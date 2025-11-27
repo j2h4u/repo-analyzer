@@ -1,6 +1,6 @@
-# Repo-to-Gemini Analyzer
+# Repo Analyzer
 
-A Python automation tool that processes a codebase archive (ZIP), uploads the context to Google Gemini API with intelligent caching, and applies LLM-generated changes or refactoring back to your local files.
+A documentation tool that processes a codebase archive (ZIP), uploads the context to Google Gemini API, and generates comprehensive documentation/specs.
 
 ## Features
 
@@ -17,26 +17,21 @@ A Python automation tool that processes a codebase archive (ZIP), uploads the co
 
 ## Setup
 
-1. **Install dependencies**:
-   ```bash
-   pip install -r requirements.txt
-   ```
+```bash
+# Install dependencies
+pip install -r requirements.txt
 
-2. **Configure environment** - create `.env` file:
-   ```shell
-   GOOGLE_API_KEY=your_api_key_here
-   ```
+# Configure environment
+echo "GOOGLE_API_KEY=your_api_key_here" > .env
 
-3. **Configure project** - copy and edit `config.yaml`:
-   ```bash
-   cp config.yaml.example config.yaml
-   ```
-   Adjust `zip_path`, `valid_extensions`, `ignore_dirs`, and model settings as needed.
+# Configure project -- copy and edit `config.yaml`
+# Adjust "zip_path", "valid_extensions", "ignore_dirs",
+# and model settings as needed
+cp config.yaml.example config.yaml
 
-4. **Make script executable** (one-time):
-   ```bash
-   chmod +x analyze_repo_zip.py
-   ```
+# Make script executable
+chmod +x analyze_repo_zip.py
+```
 
 ## Usage
 
