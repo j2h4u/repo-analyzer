@@ -12,7 +12,7 @@ import re
 import sys
 import time
 import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any
 
@@ -58,7 +58,6 @@ class ModelConfig:
     name: str
     timeout: int
     validate_model: bool
-    streaming: bool = False
     chunk_timeout: int = 60
 
 @dataclass
@@ -78,14 +77,29 @@ class InferenceStats:
     total_tokens: int
     finish_reason: str
     token_speed: float
-    streaming_enabled: bool = False
-    time_to_first_token: float | None = None
-    chunk_count: int | None = None
+    time_to_first_token: float
+    chunk_count: int
 
 @dataclass
 class LoggingConfig:
     """Configuration for logging behavior."""
     level: str = "INFO"
+
+def safe_load_dataclass(dclass_type, data: dict, section_name: str):
+    """
+    Safely loads a dataclass from a dictionary, ignoring unknown keys
+    and logging warnings for them.
+    """
+    valid_keys = {f.name for f in fields(dclass_type)}
+    filtered_data = {}
+    
+    for k, v in data.items():
+        if k in valid_keys:
+            filtered_data[k] = v
+        else:
+            logger.warning("Config warning: Unknown key '%s' in section '%s' ignored.", k, section_name)
+            
+    return dclass_type(**filtered_data)
 
 @dataclass
 class AppConfig:
@@ -116,8 +130,8 @@ class AppConfig:
                 output_dir=Path(data['project']['output_dir']),
                 report_file=data['project']['report_file']
             ),
-            model=ModelConfig(**data['model']),
-            processing=ProcessingConfig(**data['processing']),
+            model=safe_load_dataclass(ModelConfig, data['model'], 'model'),
+            processing=safe_load_dataclass(ProcessingConfig, data['processing'], 'processing'),
             logging=LoggingConfig(**data.get('logging', {'level': 'INFO'}))
         )
 
@@ -364,7 +378,9 @@ def extract_and_report(
 def extract_inference_stats(
     response: Any,
     duration_sec: float,
-    model_name: str
+    model_name: str,
+    time_to_first_token: float,
+    chunk_count: int
 ) -> InferenceStats:
     """Extracts statistics from the model response."""
     input_tokens = 0
@@ -390,12 +406,14 @@ def extract_inference_stats(
         output_tokens=output_tokens,
         total_tokens=total_tokens,
         finish_reason=finish_reason,
-        token_speed=token_speed
+        token_speed=token_speed,
+        time_to_first_token=time_to_first_token,
+        chunk_count=chunk_count
     )
 
 def log_inference_stats(stats: InferenceStats):
     """Logs inference stats to the logger."""
-    logger.info(stats)
+    logger.debug(stats)
 
 def append_inference_stats(report_path: Path, stats: InferenceStats) -> None:
     """
@@ -404,6 +422,8 @@ def append_inference_stats(report_path: Path, stats: InferenceStats) -> None:
     with report_path.open('a', encoding='utf-8') as rep:
         rep.write("--- INFERENCE STATS ---\n")
         rep.write(f"Model: {stats.model_name}\n")
+        rep.write(f"Time to First Token: {stats.time_to_first_token:.2f}s\n")
+        rep.write(f"Chunks Received: {stats.chunk_count}\n")
         rep.write(f"Duration: {format_duration(stats.duration_seconds)}\n")
 
         # 1. Token Usage
@@ -708,43 +728,7 @@ def prepare_context(config: AppConfig, run_dir: Path) -> tuple[Path, Path]:
     print_info(f"Context saved: {context_path}")
     return context_path, report_path
 
-def run_inference_standard(
-    model_config: ModelConfig,
-    gemini_file: Any,
-    sys_prompt: str,
-    user_prompt: str
-) -> tuple[Any, float]:
-    """Run model inference in standard (non-streaming) mode."""
-    spinner = Halo(text=f'Generating with {model_config.name}...', spinner='dots')
-    spinner.start()
-    start_time = time.time()
-
-    try:
-        model = genai.GenerativeModel(model_config.name)
-        response = model.generate_content(
-            [gemini_file, f"{sys_prompt}\n\nUSER REQUEST:\n{user_prompt}"],
-            request_options={"timeout": model_config.timeout}
-        )
-        end_time = time.time()
-        spinner.succeed("Generation complete!")
-        return response, end_time - start_time
-    except google_exceptions.DeadlineExceeded as e:
-        end_time = time.time()
-        elapsed = end_time - start_time
-        spinner.fail(f"Generation timed out after {format_duration(elapsed)}")
-        logger.debug("API Timeout details: %s", e)
-        print_error(
-            "The model took too long to respond (Timeout). "
-            "Try increasing the timeout in config.yaml."
-        )
-        sys.exit(1)
-    except Exception as e:
-        end_time = time.time()
-        elapsed = end_time - start_time
-        spinner.fail(f"Generation failed after {format_duration(elapsed)}: {e}")
-        raise e
-
-def run_inference_streaming(
+def run_inference(
     model_config: ModelConfig,
     gemini_file: Any,
     sys_prompt: str,
@@ -752,11 +736,11 @@ def run_inference_streaming(
 ) -> tuple[Any, float, float, int]:
     """
     Run model inference with streaming enabled.
-
+    
     Returns:
         tuple: (response, duration, time_to_first_token, chunk_count)
     """
-    spinner = Halo(text=f'Generating with {model_config.name} (streaming)...', spinner='dots')
+    spinner = Halo(text=f'Generating with {model_config.name}...', spinner='dots')
     spinner.start()
     start_time = time.time()
     last_chunk_time = start_time
@@ -773,15 +757,9 @@ def run_inference_streaming(
         )
 
         for chunk in response_stream:
-            chunk_count += 1
             current_time = time.time()
-
-            # Record time to first token
-            if time_to_first_token is None:
-                time_to_first_token = current_time - start_time
-                logger.info("Time to first token: %.2fs", time_to_first_token)
-
-            # Check for chunk timeout
+            
+            # Check for chunk timeout FIRST
             time_since_last = current_time - last_chunk_time
             if time_since_last > model_config.chunk_timeout:
                 spinner.fail(
@@ -793,26 +771,33 @@ def run_inference_streaming(
                     f"(chunk_timeout: {model_config.chunk_timeout}s)"
                 )
 
+            chunk_count += 1
+            
+            # Record time to first token
+            if time_to_first_token is None:
+                time_to_first_token = current_time - start_time
+                logger.debug("Time to first token: %.2fs", time_to_first_token)
+            
             # Update spinner with progress
             elapsed = int(current_time - start_time)
             spinner.text = (
-                f'Generating with {model_config.name} (streaming)... '
+                f'Generating with {model_config.name}... '
                 f'chunk {chunk_count}, {elapsed}s'
             )
-
+            
             last_chunk_time = current_time
             full_response = chunk
 
         end_time = time.time()
         duration = end_time - start_time
-
+        
         if full_response is None:
             spinner.fail("No response received from streaming API")
             raise ValueError("Empty streaming response")
-
+        
         spinner.succeed(f"Generation complete! ({chunk_count} chunks, {format_duration(duration)})")
         return full_response, duration, time_to_first_token or 0.0, chunk_count
-
+        
     except google_exceptions.DeadlineExceeded as e:
         end_time = time.time()
         elapsed = end_time - start_time
@@ -831,38 +816,6 @@ def run_inference_streaming(
         elapsed = end_time - start_time
         spinner.fail(f"Generation failed after {format_duration(elapsed)}: {e}")
         raise e
-
-def run_inference(
-    model_config: ModelConfig,
-    gemini_file: Any,
-    sys_prompt: str,
-    user_prompt: str
-) -> tuple[Any, float, dict[str, Any]]:
-    """
-    Run model inference using configured mode (streaming or standard).
-
-    Returns:
-        tuple: (response, duration, streaming_metrics)
-        streaming_metrics is a dict with optional keys:
-            - time_to_first_token: float | None
-            - chunk_count: int | None
-    """
-    if model_config.streaming:
-        response, duration, ttft, chunks = run_inference_streaming(
-            model_config, gemini_file, sys_prompt, user_prompt
-        )
-        return response, duration, {
-            "time_to_first_token": ttft,
-            "chunk_count": chunks
-        }
-    else:
-        response, duration = run_inference_standard(
-            model_config, gemini_file, sys_prompt, user_prompt
-        )
-        return response, duration, {
-            "time_to_first_token": None,
-            "chunk_count": None
-        }
 
 def process_response(
     response: Any,
@@ -908,9 +861,9 @@ def main() -> None:
         sys_prompt = config.project.system_prompt_file.read_text(encoding='utf-8')
         user_prompt = config.project.prompt_file.read_text(encoding='utf-8')
 
-        response, duration = run_inference(config.model, gemini_file, sys_prompt, user_prompt)
+        response, duration, ttft, chunks = run_inference(config.model, gemini_file, sys_prompt, user_prompt)
 
-        stats = extract_inference_stats(response, duration, config.model.name)
+        stats = extract_inference_stats(response, duration, config.model.name, ttft, chunks)
         process_response(response, run_dir, report_path, stats)
 
     except RepoAnalyzerError as e:
