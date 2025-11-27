@@ -1,6 +1,5 @@
 Analyze the repository context provided.
 
-
 ## PURPOSE
 Create a comprehensive onboarding documentation package for NEW DEVELOPERS (target: junior-mid level). The docs should enable a developer to:
 - run the project locally, build, and test
@@ -9,29 +8,36 @@ Create a comprehensive onboarding documentation package for NEW DEVELOPERS (targ
 - deploy to a staging environment and understand CI/CD
 - troubleshoot common failures
 
+## ONBOARDING PHILOSOPHY
+Follow the "Context -> Action -> Understanding -> Operation" flow to minimize Time-to-Hello-World:
+1. **Context**: What is this and why does it exist? (Meta, Helicopter View, Narrative)
+2. **Action**: How do I run it NOW? (Dev Setup)
+3. **Understanding**: How does it work? (Architecture, Runtime Flow, Data Models, Modules)
+4. **Operation**: How is it managed in production? (Infra, CI/CD, Troubleshooting)
 
 ## TASK
 Analyze the repository and produce the following Markdown documents:
-- 00-README.md (helicopter view + TOC)
-- 10-architecture.md (component diagrams, data flow, mermaid)
-- 20-modules/<module>-README.md (for each module: purpose, interfaces, key files, diagrams)
-- 30-dev-setup.md (local dev, docker-compose, env vars, seed data)
-- 40-ci-cd.md (CI provider, pipeline steps, deployment flow, pipeline diagrams)
+- 00-meta.md (metadata about the repo: name, version, license, author, "How I analyzed the repo", etc.)
+- 10-project-helicopter-view.md (helicopter view + TOC)
+- 15-onboarding-briefing.md (narrative onboarding story for professional developers, explaining the project holistically: architecture, modules, setup, deployment in a readable/listenable story format)
+- 20-dev-setup.md (local dev, docker-compose, env vars, seed data, available environments: dev/staging/etc)
+- 30-architecture.md (component diagrams, data flow, runtime execution flows, sequence diagrams, event/control flow, mermaid)
+- 35-data-models.md (data models, entity relationships, mermaid ER diagrams showing 1:1, 1:N, N:M relationships)
+- 40-modules/<core-module>-README.md (for top 5-10 CORE modules: purpose, interfaces, key files, internal flow diagrams)
+- 40-modules/other-modules.md (consolidated reference for all other modules)
 - 50-infra.md (IaC files, cloud provider, networking, secrets, k8s manifests)
-- 60-runbooks.md (common issues, logs, rollback steps)
-- 70-checklist.md (onboarding checklist + acceptance criteria)
-
+- 60-ci-cd.md (CI provider, pipeline steps, deployment flow, pipeline diagrams)
+- 80-troubleshooting.md (common issues, logs, logging, snapshots, backups, rollback steps)
+- 90-onboarding-checklist.md (onboarding checklist + acceptance criteria)
 
 ## OUTPUT FORMAT
 - Deliver files as Markdown text with mermaid diagrams where useful.
-- Include code snippets and exact paths to files referenced.
-- Add a short "How I analyzed the repo" section listing assumptions or missing files.
-
+- Include short, concise code snippets and exact paths to files referenced.
+- Add a short "How I analyzed the repo" section to 00-meta.md listing assumptions or missing files.
 
 ## ACCEPTANCE CRITERIA
 - A developer following the docs can run the app locally and start a dev server.
 - The docs include at least component and deployment diagrams in mermaid.
 - The docs reference CI/CD pipeline config and explain deploy triggers.
-
 
 If any of the requested files are missing in the repo, list them explicitly and explain the impact.
