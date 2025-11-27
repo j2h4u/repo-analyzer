@@ -9,7 +9,9 @@ import hashlib
 import logging
 import os
 import re
+import queue
 import sys
+import threading
 import time
 import zipfile
 from dataclasses import dataclass, fields
@@ -92,13 +94,13 @@ def safe_load_dataclass(dclass_type, data: dict, section_name: str):
     """
     valid_keys = {f.name for f in fields(dclass_type)}
     filtered_data = {}
-    
+
     for k, v in data.items():
         if k in valid_keys:
             filtered_data[k] = v
         else:
             logger.warning("Config warning: Unknown key '%s' in section '%s' ignored.", k, section_name)
-            
+
     return dclass_type(**filtered_data)
 
 @dataclass
@@ -375,46 +377,6 @@ def extract_and_report(
     write_context(output_path, zip_path, all_files, included_files)
     write_report(report_path, zip_path.name, ignore_dirs, skipped_no, skipped_ext)
 
-def extract_inference_stats(
-    response: Any,
-    duration_sec: float,
-    model_name: str,
-    time_to_first_token: float,
-    chunk_count: int
-) -> InferenceStats:
-    """Extracts statistics from the model response."""
-    input_tokens = 0
-    output_tokens = 0
-    total_tokens = 0
-    finish_reason = "UNKNOWN"
-
-    if hasattr(response, 'usage_metadata'):
-        usage = response.usage_metadata
-        input_tokens = usage.prompt_token_count
-        output_tokens = usage.candidates_token_count
-        total_tokens = usage.total_token_count
-
-    if response.candidates:
-        finish_reason = response.candidates[0].finish_reason.name
-
-    token_speed = output_tokens / duration_sec if duration_sec > 0 else 0.0
-
-    return InferenceStats(
-        model_name=model_name,
-        duration_seconds=duration_sec,
-        input_tokens=input_tokens,
-        output_tokens=output_tokens,
-        total_tokens=total_tokens,
-        finish_reason=finish_reason,
-        token_speed=token_speed,
-        time_to_first_token=time_to_first_token,
-        chunk_count=chunk_count
-    )
-
-def log_inference_stats(stats: InferenceStats):
-    """Logs inference stats to the logger."""
-    logger.debug(stats)
-
 def append_inference_stats(report_path: Path, stats: InferenceStats) -> None:
     """
     Appends clean, human-readable stats to the report.
@@ -422,9 +384,9 @@ def append_inference_stats(report_path: Path, stats: InferenceStats) -> None:
     with report_path.open('a', encoding='utf-8') as rep:
         rep.write("--- INFERENCE STATS ---\n")
         rep.write(f"Model: {stats.model_name}\n")
-        rep.write(f"Time to First Token: {stats.time_to_first_token:.2f}s\n")
         rep.write(f"Chunks Received: {stats.chunk_count}\n")
-        rep.write(f"Duration: {format_duration(stats.duration_seconds)}\n")
+        rep.write(f"Time to First Token: {format_duration(stats.time_to_first_token)}\n")
+        rep.write(f"Total time: {format_duration(stats.duration_seconds)}\n")
 
         # 1. Token Usage
         # Visual alignment using fixed width (:>6)
@@ -733,71 +695,130 @@ def run_inference(
     gemini_file: Any,
     sys_prompt: str,
     user_prompt: str
-) -> tuple[Any, float, float, int]:
+) -> tuple[str, InferenceStats]:
     """
     Run model inference with streaming enabled.
-    
+
     Returns:
-        tuple: (response, duration, time_to_first_token, chunk_count)
+        tuple: (text, stats)
     """
     spinner = Halo(text=f'Generating with {model_config.name}...', spinner='dots')
     spinner.start()
     start_time = time.time()
-    last_chunk_time = start_time
     time_to_first_token = None
     chunk_count = 0
     full_response = None
 
-    try:
-        model = genai.GenerativeModel(model_config.name)
-        response_stream = model.generate_content(
-            [gemini_file, f"{sys_prompt}\n\nUSER REQUEST:\n{user_prompt}"],
-            request_options={"timeout": model_config.timeout},
-            stream=True
-        )
+    # Queues for passing data between threads
+    chunk_queue = queue.Queue()
+    error_queue = queue.Queue()
 
-        for chunk in response_stream:
-            current_time = time.time()
-            
-            # Check for chunk timeout FIRST
-            time_since_last = current_time - last_chunk_time
-            if time_since_last > model_config.chunk_timeout:
+    def stream_consumer():
+        """Background thread to consume the stream."""
+        try:
+            model = genai.GenerativeModel(model_config.name)
+            response_stream = model.generate_content(
+                [gemini_file, f"{sys_prompt}\n\nUSER REQUEST:\n{user_prompt}"],
+                request_options={"timeout": model_config.timeout},
+                stream=True
+            )
+            for chunk in response_stream:
+                chunk_queue.put(chunk)
+            chunk_queue.put(None)  # Sentinel for end of stream
+        except Exception as e:
+            error_queue.put(e)
+
+    # Start background thread
+    t = threading.Thread(target=stream_consumer, daemon=True)
+    t.start()
+
+    # Accumulate all text parts
+    accumulated_text = []
+
+    try:
+        while True:
+            # Check for errors from the thread
+            if not error_queue.empty():
+                raise error_queue.get()
+
+            try:
+                # Wait for next chunk with precise timeout
+                chunk = chunk_queue.get(timeout=model_config.chunk_timeout)
+            except queue.Empty:
+                # Timeout hit!
+                elapsed_total = int(time.time() - start_time)
                 spinner.fail(
-                    f"No chunks received for {int(time_since_last)}s - "
-                    f"exceeds chunk_timeout ({model_config.chunk_timeout}s)"
+                    f"No chunks received for {model_config.chunk_timeout}s "
+                    f"(Total elapsed: {elapsed_total}s)"
                 )
                 raise TimeoutError(
-                    f"No activity from model for {time_since_last}s "
-                    f"(chunk_timeout: {model_config.chunk_timeout}s)"
+                    f"No activity from model for {model_config.chunk_timeout}s"
                 )
 
+            if chunk is None:  # End of stream
+                break
+
             chunk_count += 1
-            
+            current_time = time.time()
+
             # Record time to first token
             if time_to_first_token is None:
                 time_to_first_token = current_time - start_time
                 logger.debug("Time to first token: %.2fs", time_to_first_token)
-            
+
             # Update spinner with progress
             elapsed = int(current_time - start_time)
             spinner.text = (
                 f'Generating with {model_config.name}... '
                 f'chunk {chunk_count}, {elapsed}s'
             )
-            
-            last_chunk_time = current_time
+
+            # Accumulate text and keep last chunk for metadata
+            if chunk.text:
+                accumulated_text.append(chunk.text)
             full_response = chunk
 
         end_time = time.time()
         duration = end_time - start_time
-        
+
         if full_response is None:
             spinner.fail("No response received from streaming API")
             raise ValueError("Empty streaming response")
-        
+
+        final_text = "".join(accumulated_text)
+
+        # Extract statistics from the last chunk (full_response)
+        input_tokens = 0
+        output_tokens = 0
+        total_tokens = 0
+        finish_reason = "UNKNOWN"
+
+        if hasattr(full_response, 'usage_metadata'):
+            usage = full_response.usage_metadata
+            input_tokens = usage.prompt_token_count
+            output_tokens = usage.candidates_token_count
+            total_tokens = usage.total_token_count
+
+        if full_response.candidates:
+            finish_reason = full_response.candidates[0].finish_reason.name
+
+        token_speed = output_tokens / duration if duration > 0 else 0.0
+
+        stats = InferenceStats(
+            model_name=model_config.name,
+            duration_seconds=duration,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            total_tokens=total_tokens,
+            finish_reason=finish_reason,
+            token_speed=token_speed,
+            time_to_first_token=time_to_first_token or 0.0,
+            chunk_count=chunk_count
+        )
+
         spinner.succeed(f"Generation complete! ({chunk_count} chunks, {format_duration(duration)})")
-        return full_response, duration, time_to_first_token or 0.0, chunk_count
-        
+        return final_text, stats
+
     except google_exceptions.DeadlineExceeded as e:
         end_time = time.time()
         elapsed = end_time - start_time
@@ -809,7 +830,7 @@ def run_inference(
         )
         sys.exit(1)
     except TimeoutError:
-        # Already logged and displayed by chunk timeout handler
+        # Already logged and displayed by queue timeout handler
         sys.exit(1)
     except Exception as e:
         end_time = time.time()
@@ -818,29 +839,28 @@ def run_inference(
         raise e
 
 def process_response(
-    response: Any,
+    response: str,
     run_dir: Path,
     report_path: Path,
     stats: InferenceStats
 ) -> None:
     """Process model response: log stats, save response, and extract files."""
     # Process stats
-    log_inference_stats(stats)
+    logger.debug(stats)
     append_inference_stats(report_path, stats)
     print_info(f"Report updated: {report_path}")
 
     # Save raw model response
     response_path = run_dir / RESPONSE_FILENAME
     with response_path.open('w', encoding='utf-8') as f:
-        f.write(response.text)
+        f.write(response)
     print_info(f"Raw response saved: {response_path}")
 
     # Check if response has valid content
-    if response.candidates and response.candidates[0].finish_reason.name != "STOP":
-        reason = response.candidates[0].finish_reason.name
-        print_warning(f"Response finished with reason: {reason}")
+    if stats.finish_reason != "STOP":
+        print_warning(f"Response finished with reason: {stats.finish_reason}")
     else:
-        files = parse_generated_files(response.text)
+        files = parse_generated_files(response)
         unique_files = resolve_file_conflicts(files)
         save_files_to_disk(unique_files, run_dir)
 
@@ -861,9 +881,8 @@ def main() -> None:
         sys_prompt = config.project.system_prompt_file.read_text(encoding='utf-8')
         user_prompt = config.project.prompt_file.read_text(encoding='utf-8')
 
-        response, duration, ttft, chunks = run_inference(config.model, gemini_file, sys_prompt, user_prompt)
+        response, stats = run_inference(config.model, gemini_file, sys_prompt, user_prompt)
 
-        stats = extract_inference_stats(response, duration, config.model.name, ttft, chunks)
         process_response(response, run_dir, report_path, stats)
 
     except RepoAnalyzerError as e:
