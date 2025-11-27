@@ -10,7 +10,10 @@ A Python automation tool that processes a codebase archive (ZIP), uploads the co
 - **Model Validation**: Verifies API access and model name validity before starting heavy processing
 - **Diagnostic Reporting**: Generates detailed reports showing which files were excluded from the AI context
 - **Auto-Extraction**: Parses the LLM response and automatically saves generated code files to the output directory
+- **Conflict Resolution**: Automatically deduplicates and renames conflicting files to preserve all LLM-generated content
+- **Debug Logging**: Creates detailed `debug.log` with inference stats and processing details for troubleshooting
 - **Reusable Context**: Saves the merged context file for debugging or reuse in other AI models
+- **Test Coverage**: Includes unit tests for core file parsing and conflict resolution logic
 
 ## Setup
 
@@ -30,13 +33,28 @@ A Python automation tool that processes a codebase archive (ZIP), uploads the co
    ```
    Adjust `zip_path`, `valid_extensions`, `ignore_dirs`, and model settings as needed.
 
-## Usage
-
-1. Zip your target repository (e.g., `git archive -o repo.zip HEAD`)
-2. Write your instructions in `user_prompt.txt`
-3. Run the script:
+4. **Make script executable** (one-time):
    ```bash
    chmod +x analyze_repo_zip.py
+   ```
+
+## Usage
+
+1. **Get repository as ZIP**:
+   - Download from GitHub: Code → Download ZIP
+   - Or create from local repo: `git archive -o repo.zip HEAD`
+
+2. **Configure ZIP path** in `config.yaml`:
+   ```yaml
+   zip_path: "./downloaded-repo.zip"
+   ```
+
+3. **Review prompts** (optional):
+   - Default prompts in `prompts/` are ready to use
+   - Edit `prompts/user_prompt.txt` to customize analysis goals if needed
+
+4. **Run the script**:
+   ```bash
    ./analyze_repo_zip.py
    ```
 
@@ -60,13 +78,17 @@ After each run, a timestamped directory is created in `output/` containing:
   - Complete contents of all included files
   - Perfect for reusing in other AI models or debugging
 - **`report.txt`** - Execution report with token usage, processing duration, and skipped files
+- **`debug.log`** - Detailed debug log with inference statistics and processing events
+- **`response.txt`** - Raw model response for inspection
 - **Generated files** - AI-generated code preserving the original directory structure
 
 ## Tips
 
 - Check `report.txt` to see which files were excluded
+- Review `debug.log` for detailed processing information and troubleshooting
 - Use `pip freeze > requirements.txt` to update dependencies
 - Run `get-available-gemini-models.py` to find the best model for your needs
+- Execute `pytest tests/` to run unit tests
 
 ## Development
 > [!NOTE]
