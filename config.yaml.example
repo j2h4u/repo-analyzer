@@ -22,6 +22,11 @@ model:
   # Validate model name before processing (set to true only when changing models)
   validate_model: false
 
+  # NEW: Enable streaming mode
+  streaming: true
+  # NEW: Max seconds between chunks (streaming only)
+  chunk_timeout: 90
+
 logging:
   # Logging level: DEBUG, INFO, WARNING, ERROR
   # INFO shows conflict resolution, warnings and errors
