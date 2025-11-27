@@ -21,6 +21,7 @@ Analyze the repository and produce the following Markdown documents:
 - 10-project-helicopter-view.md (helicopter view + TOC)
 - 15-onboarding-briefing.md (narrative onboarding story for professional developers, explaining the project holistically: architecture, modules, setup, deployment in a readable/listenable story format)
 - 20-dev-setup.md (local dev, docker-compose, env vars, seed data, available environments: dev/staging/etc)
+- 25-code-style.md (coding standards, naming conventions for variables/functions/classes, code formatting, function length limits, comment style, linting rules, best practices)
 - 30-architecture.md (component diagrams, data flow, runtime execution flows, sequence diagrams, event/control flow, mermaid)
 - 35-data-models.md (data models, entity relationships, mermaid ER diagrams showing 1:1, 1:N, N:M relationships)
 - 40-modules/<core-module>-README.md (for top 5-10 CORE modules: purpose, interfaces, key files, internal flow diagrams)
