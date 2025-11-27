@@ -3,8 +3,8 @@ project:
   zip_path: "./project_repo.zip"
   
   # Path to prompt text files
-  prompt_file: "./user_prompt.txt"
-  system_prompt_file: "./system_prompt.txt"
+  prompt_file: "./prompts/user_prompt.txt"
+  system_prompt_file: "./prompts/system_prompt.txt"
   
   # Directory where the generated files will be saved
   # The script handles creating subdirectories if needed
