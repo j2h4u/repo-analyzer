@@ -4,7 +4,7 @@ project:
   
   # Path to prompt text files
   prompt_file: "./prompts/user_prompt.md"
-  system_prompt_file: "./prompts/system_prompt.txt"
+  system_prompt_file: "./prompts/system_prompt_v2.txt"
   
   # Directory where the generated files will be saved
   # The script handles creating subdirectories if needed
@@ -14,18 +14,16 @@ project:
 
 model:
   # Model identifier (e.g., gemini-2.0-pro, gemini-2.0-flash)
-  name: "gemini-2.5-flash"
+  name: "gemini-flash-latest"
   
   # Timeout in seconds (increase for large codebases)
-  timeout: 600
-  
-  # Validate model name before processing (set to true only when changing models)
+  timeout: 300
+
+  # Validate model name before processing. It's a time consuming operation. Set to true only when changing models.
   validate_model: false
 
-  # NEW: Enable streaming mode
-  streaming: true
-  # NEW: Max seconds between chunks (streaming only)
-  chunk_timeout: 90
+  # Max seconds between chunks
+  chunk_timeout: 60
 
 logging:
   # Logging level: DEBUG, INFO, WARNING, ERROR
