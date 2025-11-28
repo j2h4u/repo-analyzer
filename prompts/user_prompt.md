@@ -23,7 +23,8 @@ Analyze the repository and produce the following Markdown documents:
 - 20-dev-setup.md (local dev, docker-compose, env vars, seed data, available environments: dev/staging/etc)
 - 25-code-style.md (coding standards, naming conventions for variables/functions/classes, code formatting, function length limits, comment style, linting rules, best practices)
 - 30-architecture.md (component diagrams, data flow, runtime execution flows, sequence diagrams, event/control flow, mermaid)
-- 35-data-models.md (data models, entity relationships, mermaid ER diagrams showing 1:1, 1:N, N:M relationships)
+- 35-data-models.md (data models, entity relationships, mermaid ER diagrams)
+  - For guidelines on visualizing relationships and data models, refer to [CHARTS & VISUALISATION](#charts--visualisation).
 - 40-modules/<core-module>-README.md (for top 5-10 CORE modules: purpose, interfaces, key files, internal flow diagrams)
 - 40-modules/other-modules.md (consolidated reference for all other modules)
 - 50-infra.md (IaC files, cloud provider, networking, secrets, k8s manifests)
@@ -35,6 +36,24 @@ Analyze the repository and produce the following Markdown documents:
 - Deliver files as Markdown text with mermaid diagrams where useful.
 - Include short, concise code snippets and exact paths to files referenced.
 - Add a short "How I analyzed the repo" section to 00-meta.md listing assumptions or missing files.
+
+## CHARTS & VISUALISATION
+Use Mermaid `erDiagram`.
+
+### Decomposition and scope:
+- Never put the entire database into a single diagram.
+- If the model covers multiple domains or bounded contexts (e.g. Billing, Auth, Catalog), split it into multiple diagrams and explain how you grouped them.
+- Keep each diagram small enough (ideally up to 10–15 entities). If the schema is larger, propose additional diagrams instead of overloading one.
+
+### Two levels of diagrams:
+1. Overview (conceptual) diagrams:
+   - Show only entities and relationships, without attributes.
+   - Use this when I describe a new domain or when the model looks too complex.
+2. Detailed diagrams per bounded context:
+   - For each context, create a separate `erDiagram` with attributes.
+   - Show primary keys and foreign keys explicitly.
+   - Include only business‑relevant attributes needed to understand the structure.
+   - Omit technical columns like created_at, updated_at, version, soft‑delete flags, generic JSON blobs, etc.
 
 ## ACCEPTANCE CRITERIA
 - A developer following the docs can run the app locally and start a dev server.
