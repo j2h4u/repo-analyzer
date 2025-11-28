@@ -25,7 +25,14 @@ import google.generativeai as genai
 from halo import Halo
 
 # Local package imports
-from repo_analyzer.utils import format_token_count, format_duration
+from repo_analyzer.utils import (
+    format_token_count,
+    format_duration,
+    build_file_tree,
+    print_error,
+    print_warning,
+    print_info
+)
 
 # Logger will be configured in main() after loading config
 logger = logging.getLogger(__name__)
@@ -141,79 +148,10 @@ class AppConfig:
         )
 
 # --- 2. HELPERS FOR REPORTING ---
-# Note: format_token_count() and format_duration() moved to repo_analyzer.utils.formatters
-
-def print_error(msg: str, indent: int = 0):
-    """Print error message withicon"""
-    prefix = " " * indent
-    print(f"{prefix}❗️{msg}")
-
-def print_warning(msg: str, indent: int = 0):
-    """Print warning message with icon"""
-    prefix = " " * indent
-    print(f"{prefix}⚠️{msg}")
-
-def print_info(msg: str, indent: int = 2):
-    """Print info message with default 2-space indent"""
-    prefix = " " * indent
-    print(f"{prefix}{msg}")
-
-def build_file_tree(all_files: list[str], included_files: set[str]) -> str:
-    """
-    Builds a tree-style directory structure similar to the `tree` command.
-    Files not in included_files are marked with comment-like "# not attached".
-    """
-    # Build hierarchical structure
-    tree = {}
-
-    for filepath in all_files:
-        parts = filepath.split('/')
-        current = tree
-
-        # Navigate through directories
-        for part in parts[:-1]:
-            if part not in current:
-                current[part] = {}
-            current = current[part]
-
-        # Add the file with marker
-        filename = parts[-1]
-        marker = "" if filepath in included_files else " # not attached"
-        current[filename] = marker  # String value indicates it's a file
-
-    # Render the tree
-    def render(node, prefix="", name=".", is_last=True):
-        lines = []
-
-        if isinstance(node, str):
-            # It's a file (leaf node)
-            return []
-
-        # First line is the directory name
-        if name != ".":
-            connector = "└── " if is_last else "├── "
-            lines.append(f"{prefix}{connector}{name}/")
-            prefix += "    " if is_last else "│   "
-        else:
-            lines.append(".")
-
-        # Get all items (dirs and files)
-        items = sorted(node.items())
-
-        for idx, (key, value) in enumerate(items):
-            is_last_item = idx == len(items) - 1
-
-            if isinstance(value, dict):
-                # It's a directory
-                lines.extend(render(value, prefix, key, is_last_item))
-            else:
-                # It's a file
-                connector = "└── " if is_last_item else "├── "
-                lines.append(f"{prefix}{connector}{key}{value}")
-
-        return lines
-
-    return "\n".join(render(tree))
+# Note: Utility functions moved to repo_analyzer.utils:
+#   - format_token_count(), format_duration() → utils/formatters.py
+#   - build_file_tree() → utils/tree_builder.py
+#   - print_error(), print_warning(), print_info() → utils/cli_helpers.py
 
 # --- 3. CORE LOGIC ---
 
