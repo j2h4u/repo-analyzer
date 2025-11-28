@@ -24,6 +24,9 @@ from google.api_core import exceptions as google_exceptions
 import google.generativeai as genai
 from halo import Halo
 
+# Local package imports
+from repo_analyzer.utils import format_token_count, format_duration
+
 # Logger will be configured in main() after loading config
 logger = logging.getLogger(__name__)
 
@@ -138,21 +141,7 @@ class AppConfig:
         )
 
 # --- 2. HELPERS FOR REPORTING ---
-
-def format_token_count(count: int) -> str:
-    """Converts 300619 -> '301k'"""
-    if count >= 1_000_000:
-        return f"{count/1_000_000:.1f}M"
-    if count >= 1_000:
-        return f"{count/1000:.0f}k"
-    return str(count)
-
-def format_duration(seconds: float) -> str:
-    """Converts 147.5 -> '2m 27s'"""
-    m, s = divmod(int(seconds), 60)
-    if m > 0:
-        return f"{m}m {s}s"
-    return f"{s}s"
+# Note: format_token_count() and format_duration() moved to repo_analyzer.utils.formatters
 
 def print_error(msg: str, indent: int = 0):
     """Print error message withicon"""
