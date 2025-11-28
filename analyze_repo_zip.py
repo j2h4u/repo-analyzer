@@ -33,6 +33,16 @@ from repo_analyzer.utils import (
     print_warning,
     print_info
 )
+from repo_analyzer.config import (
+    AppConfig,
+    ProjectConfig,
+    ModelConfig,
+    ProcessingConfig,
+    InferenceStats,
+    LoggingConfig,
+    RepoAnalyzerError,
+    ConfigError,
+)
 
 # Logger will be configured in main() after loading config
 logger = logging.getLogger(__name__)
@@ -45,113 +55,6 @@ CONTEXT_FILENAME = "context.txt"
 REPORT_FILENAME = "report.txt"
 RESPONSE_FILENAME = "response.txt"
 DEBUG_LOG_FILENAME = "debug.log"
-
-# --- CUSTOM EXCEPTIONS ---
-class RepoAnalyzerError(Exception):
-    """Base exception for repo analyzer errors."""
-
-class ConfigError(RepoAnalyzerError):
-    """Configuration loading error."""
-
-# --- 1. CONFIGURATION STRUCTS ---
-
-@dataclass
-class ProjectConfig:
-    """Configuration for project-specific paths."""
-    zip_path: Path
-    prompt_file: Path
-    system_prompt_file: Path
-    output_dir: Path
-    report_file: str
-
-@dataclass
-class ModelConfig:
-    """Configuration for AI model settings."""
-    name: str
-    timeout: int
-    validate_model: bool
-    chunk_timeout: int = 60
-
-@dataclass
-class ProcessingConfig:
-    """Configuration for file processing and filtering."""
-    valid_extensions: list[str]
-    include_filenames: list[str]
-    ignore_dirs: list[str]
-
-@dataclass
-class InferenceStats:
-    """Statistics collected during model inference."""
-    model_name: str
-    duration_seconds: float
-    input_tokens: int
-    output_tokens: int
-    total_tokens: int
-    finish_reason: str
-    token_speed: float
-    time_to_first_token: float
-    chunk_count: int
-
-@dataclass
-class LoggingConfig:
-    """Configuration for logging behavior."""
-    level: str = "INFO"
-
-def safe_load_dataclass(dclass_type, data: dict, section_name: str):
-    """
-    Safely loads a dataclass from a dictionary, ignoring unknown keys
-    and logging warnings for them.
-    """
-    valid_keys = {f.name for f in fields(dclass_type)}
-    filtered_data = {}
-
-    for k, v in data.items():
-        if k in valid_keys:
-            filtered_data[k] = v
-        else:
-            logger.warning("Config warning: Unknown key '%s' in section '%s' ignored.", k, section_name)
-
-    return dclass_type(**filtered_data)
-
-@dataclass
-class AppConfig:
-    """Main application configuration container."""
-    project: ProjectConfig
-    model: ModelConfig
-    processing: ProcessingConfig
-    logging: LoggingConfig
-
-    @classmethod
-    def load(cls, config_path: Path | str) -> 'AppConfig':
-        """Load application configuration from a YAML file."""
-        path = Path(config_path)
-        if not path.exists():
-            raise ConfigError(f"Configuration file '{path}' not found.")
-
-        try:
-            with path.open('r', encoding='utf-8') as f:
-                data = yaml.safe_load(f)
-        except yaml.YAMLError as e:
-            raise ConfigError(f"Error parsing YAML: {e}") from e
-
-        return cls(
-            project=ProjectConfig(
-                zip_path=Path(data['project']['zip_path']),
-                prompt_file=Path(data['project']['prompt_file']),
-                system_prompt_file=Path(data['project']['system_prompt_file']),
-                output_dir=Path(data['project']['output_dir']),
-                report_file=data['project']['report_file']
-            ),
-            model=safe_load_dataclass(ModelConfig, data['model'], 'model'),
-            processing=safe_load_dataclass(ProcessingConfig, data['processing'], 'processing'),
-            logging=LoggingConfig(**data.get('logging', {'level': 'INFO'}))
-        )
-
-# --- 2. HELPERS FOR REPORTING ---
-# Note: Utility functions moved to repo_analyzer.utils:
-#   - format_token_count(), format_duration() → utils/formatters.py
-#   - build_file_tree() → utils/tree_builder.py
-#   - print_error(), print_warning(), print_info() → utils/cli_helpers.py
 
 # --- 3. CORE LOGIC ---
 
